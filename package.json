@@ -1,0 +1,10 @@
+{
+  "name": "customwp-builder",
+  "version": "1.0.0",
+  "description": "Web UI for building branded WordPress packages with selected core/plugin versions",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT"
+}

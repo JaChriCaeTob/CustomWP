@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CustomWP Builder</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <h1>CustomWP Builder</h1>
+      <p>Build branded WordPress packages with pinned core and plugin versions.</p>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <h2>1) WordPress Core</h2>
+        <label for="wp-version">Choose WordPress version</label>
+        <select id="wp-version"></select>
+        <p class="hint">Use <strong>latest</strong> or pin a specific version for reproducible builds.</p>
+      </section>
+
+      <section class="panel">
+        <h2>2) Plugin Installer</h2>
+        <div class="controls-inline">
+          <input id="plugin-query" type="text" placeholder="Search wordpress.org plugins..." />
+          <button id="search-plugins" type="button">Search</button>
+        </div>
+        <div id="plugin-results" class="results"></div>
+
+        <h3>Selected wordpress.org plugins</h3>
+        <div id="selected-plugins" class="chips"></div>
+
+        <h3>Quick bundles</h3>
+        <div class="controls-inline wrap">
+          <button class="bundle" data-bundle="seo" type="button">SEO Pack</button>
+          <button class="bundle" data-bundle="performance" type="button">Performance Pack</button>
+          <button class="bundle" data-bundle="security" type="button">Security Pack</button>
+        </div>
+
+        <h3>Upload plugin ZIP files</h3>
+        <input id="upload-plugins" type="file" accept=".zip" multiple />
+        <div id="uploaded-plugins" class="chips"></div>
+      </section>
+
+      <section class="panel">
+        <h2>3) Backend Branding</h2>
+        <label for="backend-brand-name">Admin bar brand name</label>
+        <input id="backend-brand-name" type="text" placeholder="Acme CMS" />
+
+        <label for="backend-footer-text">Admin footer text</label>
+        <input id="backend-footer-text" type="text" placeholder="Powered by Acme Digital" />
+
+        <label for="backend-login-logo">Login logo</label>
+        <input id="backend-login-logo" type="file" accept="image/*" />
+        <p id="backend-login-logo-label" class="hint">No file selected.</p>
+      </section>
+
+      <section class="panel">
+        <h2>4) Frontend Branding</h2>
+        <label for="frontend-site-title">Site title override</label>
+        <input id="frontend-site-title" type="text" placeholder="Acme Website" />
+
+        <label for="frontend-tagline">Site slogan</label>
+        <input id="frontend-tagline" type="text" placeholder="Fast, clean, and conversion-focused" />
+
+        <label for="frontend-logo">Frontend logo</label>
+        <input id="frontend-logo" type="file" accept="image/*" />
+        <p id="frontend-logo-label" class="hint">No file selected.</p>
+
+        <label for="accent-color">Accent color</label>
+        <input id="accent-color" type="color" value="#2F6FED" />
+
+        <label for="custom-css">Custom CSS (optional)</label>
+        <textarea id="custom-css" rows="6" placeholder=".site-header { border-bottom: 3px solid var(--customwp-accent); }"></textarea>
+      </section>
+
+      <section class="panel">
+        <h2>5) Profiles & Validation</h2>
+        <div class="controls-inline wrap">
+          <button id="validate-plugins" type="button">Validate Plugin Compatibility</button>
+          <button id="export-profile" type="button">Export Profile</button>
+          <label class="btn-like">
+            Import Profile
+            <input id="import-profile" type="file" accept="application/json" hidden />
+          </label>
+        </div>
+        <div id="validation-output" class="results"></div>
+      </section>
+
+      <section class="panel build-panel">
+        <h2>6) Build</h2>
+        <button id="start-build" type="button" class="primary">Build WordPress Package</button>
+        <div id="build-status" class="build-status">Idle</div>
+        <pre id="build-logs" class="logs"></pre>
+        <a id="download-link" class="download" href="#" hidden>Download Build ZIP</a>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
