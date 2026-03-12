@@ -14,6 +14,31 @@
 
     <main class="layout">
       <section class="panel">
+        <h2>0) Import Running Site</h2>
+        <label for="live-site-url">WordPress URL</label>
+        <input id="live-site-url" type="url" placeholder="https://example.com or https://example.com/subsite" />
+
+        <label for="live-site-username">Admin username</label>
+        <input id="live-site-username" type="text" placeholder="admin" />
+
+        <label for="live-site-app-password">Application password</label>
+        <input id="live-site-app-password" type="password" placeholder="xxxx xxxx xxxx xxxx xxxx xxxx" />
+
+        <p class="hint">
+          Use a WordPress <strong>Application Password</strong> for secure REST login.
+        </p>
+
+        <div class="controls-inline wrap">
+          <button id="import-live-site" type="button">Import Site Snapshot</button>
+          <button id="apply-live-branding" type="button">Apply Title/Tagline To Live Site</button>
+        </div>
+        <label for="live-snapshot-zip">Current install snapshot ZIP</label>
+        <input id="live-snapshot-zip" type="file" accept=".zip" />
+        <p id="live-snapshot-zip-label" class="hint">No snapshot ZIP selected.</p>
+        <div id="live-site-output" class="results"></div>
+      </section>
+
+      <section class="panel">
         <h2>1) WordPress Core</h2>
         <label for="wp-version">Choose WordPress version</label>
         <select id="wp-version"></select>
@@ -54,6 +79,12 @@
         <label for="backend-login-logo">Login logo</label>
         <input id="backend-login-logo" type="file" accept="image/*" />
         <p id="backend-login-logo-label" class="hint">No file selected.</p>
+
+        <div class="controls-inline wrap">
+          <button id="apply-live-backend-branding" type="button">Apply Backend Branding To Live Site</button>
+          <a id="download-live-branding-plugin" class="btn-like" href="/api/live/branding-plugin">Download Live Branding Helper</a>
+        </div>
+        <p class="hint">Requires the helper plugin to be installed on the live site.</p>
       </section>
 
       <section class="panel">
@@ -73,10 +104,40 @@
 
         <label for="custom-css">Custom CSS (optional)</label>
         <textarea id="custom-css" rows="6" placeholder=".site-header { border-bottom: 3px solid var(--customwp-accent); }"></textarea>
+
+        <div class="controls-inline wrap">
+          <button id="apply-live-branding-frontend" type="button">Apply Title/Tagline To Live Site</button>
+        </div>
+        <p class="hint">Uses the live-site credentials from the Import Running Site section.</p>
       </section>
 
       <section class="panel">
-        <h2>5) Profiles & Validation</h2>
+        <h2>5) Build Source + wp-config.php</h2>
+        <label for="build-source-mode">Build source</label>
+        <select id="build-source-mode">
+          <option value="snapshot">Snapshot ZIP (preserve current install)</option>
+          <option value="blueprint">Blueprint (download core/plugins)</option>
+        </select>
+        <p class="hint">Snapshot mode is recommended when cloning an existing site.</p>
+
+        <label for="db-name">DB name</label>
+        <input id="db-name" type="text" placeholder="wordpress_db" />
+        <label for="db-user">DB user</label>
+        <input id="db-user" type="text" placeholder="wordpress_user" />
+        <label for="db-password">DB password</label>
+        <input id="db-password" type="password" placeholder="••••••••" />
+        <label for="db-host">DB host</label>
+        <input id="db-host" type="text" placeholder="localhost" />
+        <label for="db-prefix">Table prefix</label>
+        <input id="db-prefix" type="text" placeholder="wp_" />
+        <label for="wp-home">WP_HOME (optional)</label>
+        <input id="wp-home" type="url" placeholder="https://example.com" />
+        <label for="wp-siteurl">WP_SITEURL (optional)</label>
+        <input id="wp-siteurl" type="url" placeholder="https://example.com" />
+      </section>
+
+      <section class="panel">
+        <h2>6) Profiles & Validation</h2>
         <div class="controls-inline wrap">
           <button id="validate-plugins" type="button">Validate Plugin Compatibility</button>
           <button id="export-profile" type="button">Export Profile</button>
@@ -89,7 +150,7 @@
       </section>
 
       <section class="panel build-panel">
-        <h2>6) Build</h2>
+        <h2>7) Build</h2>
         <button id="start-build" type="button" class="primary">Build WordPress Package</button>
         <div id="build-status" class="build-status">Idle</div>
         <pre id="build-logs" class="logs"></pre>

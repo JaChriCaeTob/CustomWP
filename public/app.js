@@ -3,6 +3,7 @@ const state = {
   uploadedPlugins: [],
   backendLoginLogo: null,
   frontendLogo: null,
+  snapshotZip: null,
   activeBuildId: null,
   pollTimer: null
 };
@@ -14,6 +15,14 @@ const BUNDLES = {
 };
 
 const els = {
+  liveSiteUrl: document.getElementById('live-site-url'),
+  liveSiteUsername: document.getElementById('live-site-username'),
+  liveSiteAppPassword: document.getElementById('live-site-app-password'),
+  importLiveSite: document.getElementById('import-live-site'),
+  applyLiveBranding: document.getElementById('apply-live-branding'),
+  liveSnapshotZip: document.getElementById('live-snapshot-zip'),
+  liveSnapshotZipLabel: document.getElementById('live-snapshot-zip-label'),
+  liveSiteOutput: document.getElementById('live-site-output'),
   wpVersion: document.getElementById('wp-version'),
   pluginQuery: document.getElementById('plugin-query'),
   searchPlugins: document.getElementById('search-plugins'),
@@ -25,12 +34,22 @@ const els = {
   backendFooterText: document.getElementById('backend-footer-text'),
   backendLoginLogo: document.getElementById('backend-login-logo'),
   backendLoginLogoLabel: document.getElementById('backend-login-logo-label'),
+  applyLiveBackendBranding: document.getElementById('apply-live-backend-branding'),
   frontendSiteTitle: document.getElementById('frontend-site-title'),
   frontendTagline: document.getElementById('frontend-tagline'),
   frontendLogo: document.getElementById('frontend-logo'),
   frontendLogoLabel: document.getElementById('frontend-logo-label'),
   accentColor: document.getElementById('accent-color'),
   customCss: document.getElementById('custom-css'),
+  applyLiveBrandingFrontend: document.getElementById('apply-live-branding-frontend'),
+  buildSourceMode: document.getElementById('build-source-mode'),
+  dbName: document.getElementById('db-name'),
+  dbUser: document.getElementById('db-user'),
+  dbPassword: document.getElementById('db-password'),
+  dbHost: document.getElementById('db-host'),
+  dbPrefix: document.getElementById('db-prefix'),
+  wpHome: document.getElementById('wp-home'),
+  wpSiteurl: document.getElementById('wp-siteurl'),
   validatePlugins: document.getElementById('validate-plugins'),
   exportProfile: document.getElementById('export-profile'),
   importProfile: document.getElementById('import-profile'),
@@ -79,6 +98,166 @@ function setBuildStatus(message, type = 'info') {
   els.buildStatus.dataset.type = type;
 }
 
+function ensureVersionOption(version) {
+  if (!version) return;
+  const normalized = String(version).trim();
+  if (!normalized) return;
+
+  const exists = Array.from(els.wpVersion.options).some((option) => option.value === normalized);
+  if (exists) return;
+
+  const option = document.createElement('option');
+  option.value = normalized;
+  option.textContent = normalized;
+  els.wpVersion.appendChild(option);
+}
+
+function getLiveAuthPayload() {
+  return {
+    siteUrl: els.liveSiteUrl.value.trim(),
+    username: els.liveSiteUsername.value.trim(),
+    appPassword: els.liveSiteAppPassword.value.trim()
+  };
+}
+
+async function applyBackendBrandingToLiveSite() {
+  const auth = getLiveAuthPayload();
+  els.liveSiteOutput.innerHTML = '<span class="hint">Applying backend branding to live site...</span>';
+
+  const response = await api('/api/live/apply-backend-branding', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...auth,
+      branding: {
+        backendBrandName: els.backendBrandName.value,
+        backendFooterText: els.backendFooterText.value,
+        backendLoginLogo: state.backendLoginLogo
+      }
+    })
+  });
+
+  els.liveSiteOutput.innerHTML = `
+    <article class="plugin-card">
+      <div class="title">
+        <h4>${escapeHtml(response.siteUrl)}</h4>
+        <span class="compat compatible">updated</span>
+      </div>
+      <p><strong>Backend brand:</strong> ${escapeHtml(response.applied?.backendBrandName || '')}</p>
+      <p><strong>Footer:</strong> ${escapeHtml(response.applied?.backendFooterText || '')}</p>
+      <p><strong>Login logo:</strong> ${escapeHtml(response.applied?.backendLoginLogo ? 'updated' : 'unchanged')}</p>
+    </article>
+  `;
+}
+
+function applyProfileData(data, message = 'Profile loaded.') {
+  const profile = data && typeof data === 'object' ? data : {};
+  ensureVersionOption(profile.wpVersion || 'latest');
+  els.wpVersion.value = profile.wpVersion || 'latest';
+
+  state.selectedPlugins = (profile.plugins || [])
+    .map((plugin) => ({
+      slug: String(plugin.slug || '').trim().toLowerCase(),
+      version: plugin.version ? String(plugin.version).trim() : ''
+    }))
+    .filter((plugin) => plugin.slug);
+
+  state.uploadedPlugins = Array.isArray(profile.uploadedPlugins) ? profile.uploadedPlugins : [];
+  renderSelectedPlugins();
+  renderUploadedPlugins();
+
+  const branding = profile.branding || {};
+  els.backendBrandName.value = branding.backendBrandName || '';
+  els.backendFooterText.value = branding.backendFooterText || '';
+  els.frontendSiteTitle.value = branding.frontendSiteTitle || '';
+  els.frontendTagline.value = branding.frontendTagline || '';
+  els.accentColor.value = branding.accentColor || '#2F6FED';
+  els.customCss.value = branding.customCss || '';
+
+  state.backendLoginLogo = branding.backendLoginLogo || null;
+  state.frontendLogo = branding.frontendLogo || null;
+  els.backendLoginLogoLabel.textContent = state.backendLoginLogo ? `Loaded from profile: ${state.backendLoginLogo.filename}` : 'No file selected.';
+  els.frontendLogoLabel.textContent = state.frontendLogo ? `Loaded from profile: ${state.frontendLogo.filename}` : 'No file selected.';
+
+  const source = profile.source || {};
+  els.buildSourceMode.value = source.mode === 'blueprint' ? 'blueprint' : 'snapshot';
+  state.snapshotZip = source.snapshotZip || null;
+  els.liveSnapshotZipLabel.textContent = state.snapshotZip
+    ? `Loaded from profile: ${state.snapshotZip.filename}`
+    : 'No snapshot ZIP selected.';
+
+  const wpConfig = profile.wpConfig || {};
+  els.dbName.value = wpConfig.dbName || '';
+  els.dbUser.value = wpConfig.dbUser || '';
+  els.dbPassword.value = wpConfig.dbPassword || '';
+  els.dbHost.value = wpConfig.dbHost || '';
+  els.dbPrefix.value = wpConfig.dbPrefix || '';
+  els.wpHome.value = wpConfig.wpHome || '';
+  els.wpSiteurl.value = wpConfig.wpSiteurl || '';
+
+  els.validationOutput.innerHTML = `<span class="hint">${escapeHtml(message)}</span>`;
+}
+
+function renderLiveSiteResult(imported) {
+  const warnings = Array.isArray(imported?.warnings) ? imported.warnings : [];
+  const liveSite = imported?.liveSite || {};
+  const rows = [
+    `<article class="plugin-card">`,
+    `<div class="title"><h4>${escapeHtml(liveSite.url || 'Site imported')}</h4><span class="compat compatible">connected</span></div>`,
+    `<p><strong>WordPress:</strong> ${escapeHtml(liveSite.wpVersion || 'unknown')} | <strong>User:</strong> ${escapeHtml(liveSite.userDisplayName || 'n/a')}</p>`,
+    `<p><strong>Detected plugin slugs:</strong> ${escapeHtml(String(liveSite.pluginCount ?? 0))}</p>`,
+    `</article>`
+  ];
+
+  warnings.forEach((warning) => {
+    rows.push(
+      `<article class="plugin-card"><div class="title"><h4>Warning</h4><span class="compat untested">partial</span></div><p>${escapeHtml(warning)}</p></article>`
+    );
+  });
+
+  els.liveSiteOutput.innerHTML = rows.join('');
+}
+
+async function importLiveSiteSnapshot() {
+  const auth = getLiveAuthPayload();
+  els.liveSiteOutput.innerHTML = '<span class="hint">Connecting to live site...</span>';
+
+  const imported = await api('/api/live/import', {
+    method: 'POST',
+    body: JSON.stringify(auth)
+  });
+
+  els.buildSourceMode.value = 'snapshot';
+  applyProfileData(imported.profile, 'Imported live site snapshot into the builder.');
+  renderLiveSiteResult(imported);
+}
+
+async function applyCurrentBrandingToLiveSite() {
+  const auth = getLiveAuthPayload();
+  els.liveSiteOutput.innerHTML = '<span class="hint">Applying title/tagline to live site...</span>';
+
+  const response = await api('/api/live/apply', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...auth,
+      branding: {
+        frontendSiteTitle: els.frontendSiteTitle.value,
+        frontendTagline: els.frontendTagline.value
+      }
+    })
+  });
+
+  els.liveSiteOutput.innerHTML = `
+    <article class="plugin-card">
+      <div class="title">
+        <h4>${escapeHtml(response.siteUrl)}</h4>
+        <span class="compat compatible">updated</span>
+      </div>
+      <p><strong>Title:</strong> ${escapeHtml(response.applied?.title || '')}</p>
+      <p><strong>Tagline:</strong> ${escapeHtml(response.applied?.description || '')}</p>
+    </article>
+  `;
+}
+
 function renderSelectedPlugins() {
   els.selectedPlugins.innerHTML = '';
 
@@ -90,7 +269,8 @@ function renderSelectedPlugins() {
   state.selectedPlugins.forEach((plugin) => {
     const chip = document.createElement('span');
     chip.className = 'chip';
-    chip.innerHTML = `${escapeHtml(plugin.slug)} <button aria-label="Remove">&times;</button>`;
+    const label = plugin.version ? `${plugin.slug}@${plugin.version}` : plugin.slug;
+    chip.innerHTML = `${escapeHtml(label)} <button aria-label="Remove">&times;</button>`;
 
     chip.querySelector('button').addEventListener('click', () => {
       state.selectedPlugins = state.selectedPlugins.filter((p) => p.slug !== plugin.slug);
@@ -128,7 +308,7 @@ function ensurePlugin(slug) {
   if (!normalized) return;
 
   if (!state.selectedPlugins.some((plugin) => plugin.slug === normalized)) {
-    state.selectedPlugins.push({ slug: normalized });
+    state.selectedPlugins.push({ slug: normalized, version: '' });
   }
 }
 
@@ -242,10 +422,24 @@ async function handleImageFile(inputFile, targetKey, labelElement) {
 }
 
 function getPayload() {
+  const sourceMode = els.buildSourceMode.value || 'snapshot';
   return {
     wpVersion: els.wpVersion.value,
     plugins: state.selectedPlugins,
     uploadedPlugins: state.uploadedPlugins,
+    source: {
+      mode: sourceMode,
+      snapshotZip: sourceMode === 'snapshot' ? state.snapshotZip : null
+    },
+    wpConfig: {
+      dbName: els.dbName.value,
+      dbUser: els.dbUser.value,
+      dbPassword: els.dbPassword.value,
+      dbHost: els.dbHost.value,
+      dbPrefix: els.dbPrefix.value,
+      wpHome: els.wpHome.value,
+      wpSiteurl: els.wpSiteurl.value
+    },
     branding: {
       backendBrandName: els.backendBrandName.value,
       backendFooterText: els.backendFooterText.value,
@@ -274,6 +468,7 @@ async function validatePlugins() {
         method: 'POST',
         body: JSON.stringify({
           slug: plugin.slug,
+          preferredVersion: plugin.version || null,
           wpVersion: els.wpVersion.value === 'latest' ? null : els.wpVersion.value
         })
       });
@@ -326,31 +521,7 @@ async function importProfile(file) {
 
   const text = await file.text();
   const data = JSON.parse(text);
-
-  els.wpVersion.value = data.wpVersion || 'latest';
-
-  state.selectedPlugins = (data.plugins || [])
-    .map((plugin) => ({ slug: String(plugin.slug || '').trim().toLowerCase() }))
-    .filter((plugin) => plugin.slug);
-
-  state.uploadedPlugins = Array.isArray(data.uploadedPlugins) ? data.uploadedPlugins : [];
-  renderSelectedPlugins();
-  renderUploadedPlugins();
-
-  const branding = data.branding || {};
-  els.backendBrandName.value = branding.backendBrandName || '';
-  els.backendFooterText.value = branding.backendFooterText || '';
-  els.frontendSiteTitle.value = branding.frontendSiteTitle || '';
-  els.frontendTagline.value = branding.frontendTagline || '';
-  els.accentColor.value = branding.accentColor || '#2F6FED';
-  els.customCss.value = branding.customCss || '';
-
-  state.backendLoginLogo = branding.backendLoginLogo || null;
-  state.frontendLogo = branding.frontendLogo || null;
-  els.backendLoginLogoLabel.textContent = state.backendLoginLogo ? `Loaded from profile: ${state.backendLoginLogo.filename}` : 'No file selected.';
-  els.frontendLogoLabel.textContent = state.frontendLogo ? `Loaded from profile: ${state.frontendLogo.filename}` : 'No file selected.';
-
-  els.validationOutput.innerHTML = '<span class="hint">Profile imported.</span>';
+  applyProfileData(data, 'Profile imported.');
 }
 
 async function pollBuild(id) {
@@ -390,6 +561,10 @@ async function startBuild() {
   els.buildLogs.textContent = '';
   setBuildStatus('Submitting build...', 'running');
 
+  if (els.buildSourceMode.value === 'snapshot' && !state.snapshotZip?.dataBase64) {
+    throw new Error('Snapshot mode requires uploading a current install snapshot ZIP.');
+  }
+
   const payload = getPayload();
   const response = await api('/api/build', {
     method: 'POST',
@@ -400,6 +575,30 @@ async function startBuild() {
 }
 
 function registerEvents() {
+  els.importLiveSite.addEventListener('click', () => {
+    importLiveSiteSnapshot().catch((error) => {
+      els.liveSiteOutput.innerHTML = `<span class="hint">Import error: ${escapeHtml(error.message)}</span>`;
+    });
+  });
+
+  els.applyLiveBranding.addEventListener('click', () => {
+    applyCurrentBrandingToLiveSite().catch((error) => {
+      els.liveSiteOutput.innerHTML = `<span class="hint">Apply error: ${escapeHtml(error.message)}</span>`;
+    });
+  });
+
+  els.applyLiveBackendBranding.addEventListener('click', () => {
+    applyBackendBrandingToLiveSite().catch((error) => {
+      els.liveSiteOutput.innerHTML = `<span class="hint">Apply error: ${escapeHtml(error.message)}</span>`;
+    });
+  });
+
+  els.applyLiveBrandingFrontend.addEventListener('click', () => {
+    applyCurrentBrandingToLiveSite().catch((error) => {
+      els.liveSiteOutput.innerHTML = `<span class="hint">Apply error: ${escapeHtml(error.message)}</span>`;
+    });
+  });
+
   els.searchPlugins.addEventListener('click', () => {
     searchPlugins().catch((error) => {
       els.pluginResults.innerHTML = `<span class="hint">${escapeHtml(error.message)}</span>`;
@@ -417,6 +616,29 @@ function registerEvents() {
     handleUploadedPluginFiles(els.uploadPlugins.files).catch((error) => {
       els.validationOutput.innerHTML = `<span class="hint">${escapeHtml(error.message)}</span>`;
     });
+  });
+
+  els.liveSnapshotZip.addEventListener('change', async () => {
+    try {
+      const file = els.liveSnapshotZip.files?.[0];
+      if (!file) {
+        state.snapshotZip = null;
+        els.liveSnapshotZipLabel.textContent = 'No snapshot ZIP selected.';
+        return;
+      }
+      if (!file.name.toLowerCase().endsWith('.zip')) {
+        throw new Error('Snapshot must be a .zip file');
+      }
+
+      state.snapshotZip = {
+        filename: file.name,
+        dataBase64: await fileToBase64(file)
+      };
+      els.liveSnapshotZipLabel.textContent = `Loaded snapshot: ${file.name}`;
+    } catch (error) {
+      state.snapshotZip = null;
+      els.liveSnapshotZipLabel.textContent = error.message;
+    }
   });
 
   els.backendLoginLogo.addEventListener('change', () => {

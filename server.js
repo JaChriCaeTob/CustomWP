@@ -68,6 +68,87 @@ function normalizeSlug(input) {
     .replace(/[^a-z0-9-]/g, '');
 }
 
+function createHttpError(message, statusCode = 500) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function normalizeSiteUrl(input) {
+  const raw = String(input || '').trim();
+  if (!raw) {
+    throw createHttpError('Site URL is required', 400);
+  }
+
+  let candidate = raw;
+  if (!/^https?:\/\//i.test(candidate)) {
+    candidate = `https://${candidate}`;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw createHttpError('Invalid site URL', 400);
+  }
+
+  parsed.hash = '';
+  parsed.search = '';
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+
+  return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+}
+
+function joinSiteUrl(baseUrl, endpoint) {
+  return new URL(endpoint.replace(/^\//, ''), `${baseUrl}/`).toString();
+}
+
+function buildBasicAuthHeader(username, appPassword) {
+  const user = String(username || '').trim();
+  const pass = String(appPassword || '').trim();
+  if (!user || !pass) {
+    throw createHttpError('Username and application password are required', 400);
+  }
+  return `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+}
+
+function extractWpVersionFromGenerator(generator) {
+  const match = String(generator || '').match(/[?&]v=([0-9]+(?:\.[0-9]+){0,3})/i);
+  return match ? match[1] : null;
+}
+
+function pluginEntryToSlug(entry) {
+  if (!entry || typeof entry !== 'object') return '';
+  if (entry.plugin && typeof entry.plugin === 'string') {
+    return normalizeSlug(entry.plugin.split('/')[0]);
+  }
+  if (entry.slug && typeof entry.slug === 'string') {
+    return normalizeSlug(entry.slug);
+  }
+  return '';
+}
+
+function pluginEntryToVersion(entry) {
+  if (!entry || typeof entry !== 'object') return '';
+  const version = String(entry.version || '').trim();
+  return isVersionLike(version) ? version : '';
+}
+
+function inferMimeType(filename) {
+  const ext = String(filename || '').toLowerCase().split('.').pop();
+  if (ext === 'png') return 'image/png';
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'gif') return 'image/gif';
+  if (ext === 'svg') return 'image/svg+xml';
+  return 'application/octet-stream';
+}
+
+function toDataUrl(fileObj) {
+  if (!fileObj || !fileObj.dataBase64) return '';
+  const mime = inferMimeType(fileObj.filename);
+  return `data:${mime};base64,${fileObj.dataBase64}`;
+}
+
 async function ensureDirs() {
   await fsp.mkdir(PUBLIC_DIR, { recursive: true });
   await fsp.mkdir(BUILD_DIR, { recursive: true });
@@ -77,7 +158,7 @@ async function ensureDirs() {
 async function readJsonBody(req) {
   const chunks = [];
   let total = 0;
-  const maxBytes = 60 * 1024 * 1024;
+  const maxBytes = 450 * 1024 * 1024;
 
   for await (const chunk of req) {
     total += chunk.length;
@@ -107,6 +188,295 @@ async function fetchJson(url) {
     throw new Error(`Request failed (${response.status}) for ${url}`);
   }
   return response.json();
+}
+
+async function fetchJsonWithAuth(url, authHeader, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      Accept: 'application/json',
+      ...(options.headers || {}),
+      Authorization: authHeader
+    }
+  });
+
+  const contentType = response.headers.get('content-type') || '';
+  let payload = null;
+  let raw = '';
+
+  if (contentType.includes('application/json')) {
+    payload = await response.json();
+  } else {
+    raw = await response.text();
+  }
+
+  if (!response.ok) {
+    const detail = payload?.message || raw.slice(0, 200) || `Request failed (${response.status})`;
+    throw createHttpError(detail, response.status);
+  }
+
+  if (payload !== null) return payload;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw createHttpError(`Unexpected non-JSON response from ${url}`, 502);
+  }
+}
+
+async function importLiveSiteProfile(body) {
+  const siteUrl = normalizeSiteUrl(body.siteUrl);
+  const authHeader = buildBasicAuthHeader(body.username, body.appPassword);
+  const warnings = [];
+
+  const rootInfo = await fetchJsonWithAuth(joinSiteUrl(siteUrl, '/wp-json'), authHeader);
+  const userInfo = await fetchJsonWithAuth(
+    joinSiteUrl(siteUrl, '/wp-json/wp/v2/users/me?context=edit'),
+    authHeader
+  );
+
+  let settings = null;
+  try {
+    settings = await fetchJsonWithAuth(joinSiteUrl(siteUrl, '/wp-json/wp/v2/settings'), authHeader);
+  } catch (error) {
+    warnings.push(
+      `Could not read site settings from /wp/v2/settings: ${error.message}. Continuing with defaults.`
+    );
+  }
+
+  let pluginEntries = [];
+  try {
+    const plugins = await fetchJsonWithAuth(
+      joinSiteUrl(siteUrl, '/wp-json/wp/v2/plugins?per_page=100'),
+      authHeader
+    );
+    pluginEntries = Array.isArray(plugins) ? plugins : [];
+  } catch (error) {
+    warnings.push(
+      `Could not read installed plugins from /wp/v2/plugins: ${error.message}. You can still add plugins manually.`
+    );
+  }
+
+  const wpVersion = extractWpVersionFromGenerator(rootInfo?.generator) || 'latest';
+  const pluginBySlug = new Map();
+  for (const entry of pluginEntries) {
+    const slug = pluginEntryToSlug(entry);
+    if (!slug) continue;
+    if (pluginBySlug.has(slug)) continue;
+    pluginBySlug.set(slug, pluginEntryToVersion(entry));
+  }
+
+  const profile = {
+    wpVersion,
+    plugins: Array.from(pluginBySlug.entries()).map(([slug, version]) => ({
+      slug,
+      version
+    })),
+    uploadedPlugins: [],
+    source: {
+      mode: 'snapshot',
+      snapshotZip: null
+    },
+    wpConfig: {
+      dbName: '',
+      dbUser: '',
+      dbPassword: '',
+      dbHost: '',
+      dbPrefix: '',
+      wpHome: settings?.url || '',
+      wpSiteurl: settings?.url || ''
+    },
+    branding: {
+      backendBrandName: settings?.title || '',
+      backendFooterText: '',
+      frontendSiteTitle: settings?.title || '',
+      frontendTagline: settings?.description || '',
+      accentColor: '#2F6FED',
+      customCss: '',
+      backendLoginLogo: null,
+      frontendLogo: null
+    }
+  };
+
+  return {
+    liveSite: {
+      url: siteUrl,
+      wpVersion,
+      userDisplayName: userInfo?.name || userInfo?.slug || '',
+      pluginCount: pluginBySlug.size
+    },
+    warnings,
+    profile
+  };
+}
+
+async function applyLiveSiteSettings(body) {
+  const siteUrl = normalizeSiteUrl(body.siteUrl);
+  const authHeader = buildBasicAuthHeader(body.username, body.appPassword);
+
+  const branding = body.branding && typeof body.branding === 'object' ? body.branding : {};
+  const title = String(branding.frontendSiteTitle || '').trim();
+  const tagline = String(branding.frontendTagline || '').trim();
+
+  const payload = {};
+  if (title) payload.title = title;
+  if (tagline) payload.description = tagline;
+
+  if (Object.keys(payload).length === 0) {
+    throw createHttpError('Provide frontend site title and/or tagline before applying to live site', 400);
+  }
+
+  const result = await fetchJsonWithAuth(joinSiteUrl(siteUrl, '/wp-json/wp/v2/settings'), authHeader, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  return {
+    siteUrl,
+    applied: {
+      title: result?.title || '',
+      description: result?.description || ''
+    }
+  };
+}
+
+function generateLiveBrandingPluginPhp() {
+  return `<?php
+/**
+ * Plugin Name: CustomWP Live Branding Helper
+ * Description: Applies CustomWP backend branding via REST.
+ * Version: 1.0.0
+ */
+
+if (!defined('ABSPATH')) {
+  exit;
+}
+
+function customwp_live_branding_get_options() {
+  $options = get_option('customwp_live_branding', array());
+  return is_array($options) ? $options : array();
+}
+
+function customwp_live_branding_set_options($payload) {
+  $data = array(
+    'backendBrandName' => isset($payload['backendBrandName']) ? sanitize_text_field($payload['backendBrandName']) : '',
+    'backendFooterText' => isset($payload['backendFooterText']) ? sanitize_text_field($payload['backendFooterText']) : '',
+    'backendLoginLogoDataUrl' => isset($payload['backendLoginLogoDataUrl']) ? esc_url_raw($payload['backendLoginLogoDataUrl']) : ''
+  );
+  update_option('customwp_live_branding', $data, false);
+  return $data;
+}
+
+add_action('rest_api_init', function () {
+  register_rest_route('customwp/v1', '/branding', array(
+    array(
+      'methods' => 'GET',
+      'permission_callback' => function () {
+        return current_user_can('manage_options');
+      },
+      'callback' => function () {
+        return rest_ensure_response(customwp_live_branding_get_options());
+      }
+    ),
+    array(
+      'methods' => 'POST',
+      'permission_callback' => function () {
+        return current_user_can('manage_options');
+      },
+      'callback' => function ($request) {
+        $payload = $request->get_json_params();
+        if (!is_array($payload)) {
+          $payload = array();
+        }
+        $data = customwp_live_branding_set_options($payload);
+        return rest_ensure_response($data);
+      }
+    )
+  ));
+});
+
+add_action('login_enqueue_scripts', function () {
+  $options = customwp_live_branding_get_options();
+  $logo = isset($options['backendLoginLogoDataUrl']) ? $options['backendLoginLogoDataUrl'] : '';
+  if (!$logo) {
+    return;
+  }
+
+  echo '<style>#login h1 a{background-image:url(' . esc_url($logo) . ');background-size:contain;width:100%;}</style>';
+});
+
+add_action('admin_bar_menu', function ($wp_admin_bar) {
+  $options = customwp_live_branding_get_options();
+  $brand = isset($options['backendBrandName']) ? $options['backendBrandName'] : '';
+  if (!$brand) {
+    return;
+  }
+
+  $wp_admin_bar->remove_node('wp-logo');
+  $wp_admin_bar->add_node(array(
+    'id'    => 'customwp-brand',
+    'title' => esc_html($brand),
+    'href'  => admin_url()
+  ));
+}, 99);
+
+add_filter('admin_footer_text', function ($text) {
+  $options = customwp_live_branding_get_options();
+  $footer = isset($options['backendFooterText']) ? $options['backendFooterText'] : '';
+  return $footer ? esc_html($footer) : $text;
+});
+`;
+}
+
+async function buildLiveBrandingPluginZip() {
+  const workRoot = path.join(TMP_DIR, `live-branding-${randomUUID()}`);
+  const pluginRoot = path.join(workRoot, 'customwp-live-branding');
+  const pluginPath = path.join(pluginRoot, 'customwp-live-branding.php');
+  const zipPath = path.join(workRoot, 'customwp-live-branding.zip');
+
+  await fsp.mkdir(pluginRoot, { recursive: true });
+  await fsp.writeFile(pluginPath, generateLiveBrandingPluginPhp(), 'utf-8');
+  await runCommand('zip', ['-qr', zipPath, 'customwp-live-branding'], { cwd: workRoot });
+
+  return { zipPath, workRoot };
+}
+
+async function applyBackendBrandingToLiveSite(body) {
+  const siteUrl = normalizeSiteUrl(body.siteUrl);
+  const authHeader = buildBasicAuthHeader(body.username, body.appPassword);
+  const branding = body.branding && typeof body.branding === 'object' ? body.branding : {};
+
+  const payload = {
+    backendBrandName: String(branding.backendBrandName || '').trim(),
+    backendFooterText: String(branding.backendFooterText || '').trim(),
+    backendLoginLogoDataUrl: branding.backendLoginLogo ? toDataUrl(branding.backendLoginLogo) : ''
+  };
+
+  try {
+    const result = await fetchJsonWithAuth(joinSiteUrl(siteUrl, '/wp-json/customwp/v1/branding'), authHeader, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    return {
+      siteUrl,
+      applied: {
+        backendBrandName: result?.backendBrandName || payload.backendBrandName,
+        backendFooterText: result?.backendFooterText || payload.backendFooterText,
+        backendLoginLogo: Boolean(result?.backendLoginLogoDataUrl || payload.backendLoginLogoDataUrl)
+      }
+    };
+  } catch (error) {
+    if (error.statusCode === 404) {
+      throw createHttpError(
+        'CustomWP Live Branding Helper is not installed on the live site. Download it from /api/live/branding-plugin and install it first.',
+        404
+      );
+    }
+    throw error;
+  }
 }
 
 async function downloadFile(url, outputPath) {
@@ -194,7 +564,7 @@ function resolveCompatibility(plugin, wpVersion) {
   };
 }
 
-async function resolvePluginForInstall(slug, wpVersion) {
+async function resolvePluginForInstall(slug, wpVersion, preferredVersion = null) {
   const cleanSlug = normalizeSlug(slug);
   if (!cleanSlug) throw new Error('Invalid plugin slug');
 
@@ -208,7 +578,18 @@ async function resolvePluginForInstall(slug, wpVersion) {
   let targetVersion = info.version;
   let reason = 'Latest plugin version selected.';
 
-  if (wpVersion && isVersionLike(wpVersion) && info.requires && isVersionLike(info.requires)) {
+  if (preferredVersion && versions[preferredVersion]) {
+    targetVersion = preferredVersion;
+    reason = `Pinned to imported plugin version ${preferredVersion}.`;
+  }
+
+  if (
+    !preferredVersion &&
+    wpVersion &&
+    isVersionLike(wpVersion) &&
+    info.requires &&
+    isVersionLike(info.requires)
+  ) {
     if (compareVersions(wpVersion, info.requires) < 0) {
       const candidates = Object.keys(versions)
         .filter((v) => isVersionLike(v))
@@ -259,6 +640,167 @@ async function saveBase64File(fileObj, targetDir, fallbackName) {
   return {
     filename,
     outputPath
+  };
+}
+
+async function pathExists(targetPath) {
+  try {
+    await fsp.access(targetPath, fs.constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function findWordPressRoot(searchRoot, maxDepth = 5) {
+  const queue = [{ dir: searchRoot, depth: 0 }];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const currentDir = current.dir;
+    const depth = current.depth;
+
+    const hasWpContent = await pathExists(path.join(currentDir, 'wp-content'));
+    const hasWpIncludesVersion = await pathExists(path.join(currentDir, 'wp-includes', 'version.php'));
+    const hasConfig = await pathExists(path.join(currentDir, 'wp-config.php'))
+      || await pathExists(path.join(currentDir, 'wp-config-sample.php'));
+
+    if (hasWpContent && hasWpIncludesVersion && hasConfig) {
+      return currentDir;
+    }
+
+    if (depth >= maxDepth) {
+      continue;
+    }
+
+    let entries = [];
+    try {
+      entries = await fsp.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.')) continue;
+      queue.push({ dir: path.join(currentDir, entry.name), depth: depth + 1 });
+    }
+  }
+
+  return null;
+}
+
+function phpSingleQuoted(value) {
+  return `'${String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+function replacePhpDefine(content, constantName, nextValue) {
+  if (!nextValue) return content;
+  const pattern = new RegExp(
+    `define\\(\\s*['"]${constantName}['"]\\s*,\\s*([\\s\\S]*?)\\);`,
+    'm'
+  );
+  if (pattern.test(content)) {
+    return content.replace(pattern, `define('${constantName}', ${phpSingleQuoted(nextValue)});`);
+  }
+  return `${content}\ndefine('${constantName}', ${phpSingleQuoted(nextValue)});\n`;
+}
+
+function replaceTablePrefix(content, prefix) {
+  if (!prefix) return content;
+  const pattern = /\$table_prefix\s*=\s*['"][^'"]*['"]\s*;/m;
+  if (pattern.test(content)) {
+    return content.replace(pattern, `$table_prefix = ${phpSingleQuoted(prefix)};`);
+  }
+  return `${content}\n$table_prefix = ${phpSingleQuoted(prefix)};\n`;
+}
+
+async function applyWpConfigOverrides(wpRoot, config, log) {
+  const wpConfigPath = path.join(wpRoot, 'wp-config.php');
+  const samplePath = path.join(wpRoot, 'wp-config-sample.php');
+
+  if (!(await pathExists(wpConfigPath))) {
+    if (await pathExists(samplePath)) {
+      await fsp.copyFile(samplePath, wpConfigPath);
+      log('Created wp-config.php from wp-config-sample.php.');
+    } else {
+      throw createHttpError('Could not find wp-config.php or wp-config-sample.php in snapshot/build root');
+    }
+  }
+
+  let content = await fsp.readFile(wpConfigPath, 'utf-8');
+
+  content = replacePhpDefine(content, 'DB_NAME', config.dbName);
+  content = replacePhpDefine(content, 'DB_USER', config.dbUser);
+  content = replacePhpDefine(content, 'DB_PASSWORD', config.dbPassword);
+  content = replacePhpDefine(content, 'DB_HOST', config.dbHost);
+  content = replacePhpDefine(content, 'WP_HOME', config.wpHome);
+  content = replacePhpDefine(content, 'WP_SITEURL', config.wpSiteurl);
+  content = replaceTablePrefix(content, config.dbPrefix);
+
+  await fsp.writeFile(wpConfigPath, content, 'utf-8');
+}
+
+async function detectWordPressVersionFromFiles(wpRoot) {
+  const versionPath = path.join(wpRoot, 'wp-includes', 'version.php');
+  if (!(await pathExists(versionPath))) return '';
+
+  try {
+    const raw = await fsp.readFile(versionPath, 'utf-8');
+    const match = raw.match(/\$wp_version\s*=\s*'([^']+)'/);
+    return match ? String(match[1]).trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+async function prepareWordPressBase(spec, workRoot, log) {
+  if (spec.source.mode === 'snapshot') {
+    if (!spec.source.snapshotZip?.dataBase64) {
+      throw createHttpError('Snapshot mode requires a site snapshot ZIP upload.', 400);
+    }
+
+    const snapshotName = safeFilename(spec.source.snapshotZip.filename, 'site-snapshot.zip');
+    const snapshotZipPath = path.join(workRoot, snapshotName);
+    const snapshotExtractRoot = path.join(workRoot, 'snapshot-extract');
+
+    log(`Using snapshot base (${snapshotName})...`);
+    await fsp.writeFile(snapshotZipPath, Buffer.from(spec.source.snapshotZip.dataBase64, 'base64'));
+    await fsp.mkdir(snapshotExtractRoot, { recursive: true });
+    await runCommand('unzip', ['-q', '-o', snapshotZipPath, '-d', snapshotExtractRoot]);
+
+    const wpRoot = await findWordPressRoot(snapshotExtractRoot);
+    if (!wpRoot) {
+      throw createHttpError(
+        'Could not find a WordPress root inside the snapshot ZIP (expected wp-content and wp-includes/version.php).',
+        400
+      );
+    }
+
+    const detectedVersion = await detectWordPressVersionFromFiles(wpRoot);
+    return {
+      wpRoot,
+      coreVersion: detectedVersion || spec.wpVersion || 'snapshot',
+      mode: 'snapshot'
+    };
+  }
+
+  const coreVersion = spec.wpVersion === 'latest' ? 'latest' : spec.wpVersion;
+  const coreUrl = coreVersion === 'latest'
+    ? 'https://wordpress.org/latest.zip'
+    : `https://wordpress.org/wordpress-${coreVersion}.zip`;
+  const coreZip = path.join(workRoot, 'wordpress-core.zip');
+
+  log(`Downloading WordPress core (${coreVersion})...`);
+  await downloadFile(coreUrl, coreZip);
+
+  log('Extracting WordPress core...');
+  await runCommand('unzip', ['-q', '-o', coreZip, '-d', workRoot]);
+
+  return {
+    wpRoot: path.join(workRoot, 'wordpress'),
+    coreVersion,
+    mode: 'blueprint'
   };
 }
 
@@ -366,11 +908,32 @@ add_action('wp_body_open', function () {
 
 function normalizeBuildPayload(payload) {
   const branding = payload.branding || {};
+  const source = payload.source || {};
+  const wpConfig = payload.wpConfig || {};
+  const mode = String(source.mode || '').trim().toLowerCase() === 'blueprint' ? 'blueprint' : 'snapshot';
 
   return {
     wpVersion: payload.wpVersion || 'latest',
-    plugins: Array.isArray(payload.plugins) ? payload.plugins : [],
+    plugins: Array.isArray(payload.plugins)
+      ? payload.plugins.map((plugin) => ({
+          slug: normalizeSlug(plugin?.slug || plugin),
+          version: isVersionLike(plugin?.version || '') ? String(plugin.version) : ''
+        })).filter((plugin) => plugin.slug)
+      : [],
     uploadedPlugins: Array.isArray(payload.uploadedPlugins) ? payload.uploadedPlugins : [],
+    source: {
+      mode,
+      snapshotZip: source.snapshotZip || null
+    },
+    wpConfig: {
+      dbName: String(wpConfig.dbName || '').trim(),
+      dbUser: String(wpConfig.dbUser || '').trim(),
+      dbPassword: String(wpConfig.dbPassword || ''),
+      dbHost: String(wpConfig.dbHost || '').trim(),
+      dbPrefix: String(wpConfig.dbPrefix || '').trim(),
+      wpHome: String(wpConfig.wpHome || '').trim(),
+      wpSiteurl: String(wpConfig.wpSiteurl || '').trim()
+    },
     branding: {
       backendBrandName: String(branding.backendBrandName || '').trim(),
       backendFooterText: String(branding.backendFooterText || '').trim(),
@@ -388,7 +951,6 @@ async function runBuildJob(job, payload) {
   const buildId = job.id;
   const spec = normalizeBuildPayload(payload);
   const workRoot = path.join(TMP_DIR, `build-${buildId}`);
-  const coreZip = path.join(workRoot, 'wordpress-core.zip');
 
   function log(message) {
     job.logs.push(message);
@@ -399,18 +961,10 @@ async function runBuildJob(job, payload) {
     await fsp.rm(workRoot, { recursive: true, force: true });
     await fsp.mkdir(workRoot, { recursive: true });
 
-    const coreVersion = spec.wpVersion === 'latest' ? 'latest' : spec.wpVersion;
-    const coreUrl = coreVersion === 'latest'
-      ? 'https://wordpress.org/latest.zip'
-      : `https://wordpress.org/wordpress-${coreVersion}.zip`;
+    const base = await prepareWordPressBase(spec, workRoot, log);
+    const wpRoot = base.wpRoot;
+    const coreVersion = base.coreVersion;
 
-    log(`Downloading WordPress core (${coreVersion})...`);
-    await downloadFile(coreUrl, coreZip);
-
-    log('Extracting WordPress core...');
-    await runCommand('unzip', ['-q', coreZip, '-d', workRoot]);
-
-    const wpRoot = path.join(workRoot, 'wordpress');
     const pluginDir = path.join(wpRoot, 'wp-content', 'plugins');
     const customRoot = path.join(wpRoot, 'wp-content', 'customwp');
     const customAssets = path.join(customRoot, 'assets');
@@ -425,9 +979,25 @@ async function runBuildJob(job, payload) {
     for (const plugin of spec.plugins) {
       const slug = normalizeSlug(plugin.slug || plugin);
       if (!slug) continue;
+      const preferredVersion = String(plugin.version || '').trim();
+
+      if (spec.source.mode === 'snapshot' && await pathExists(path.join(pluginDir, slug))) {
+        log(`Keeping plugin ${slug} from snapshot.`);
+        installedPlugins.push({
+          source: 'snapshot',
+          slug,
+          version: preferredVersion || null,
+          reason: 'Already present in snapshot'
+        });
+        continue;
+      }
 
       log(`Resolving plugin ${slug}...`);
-      const resolved = await resolvePluginForInstall(slug, coreVersion === 'latest' ? null : coreVersion);
+      const resolved = await resolvePluginForInstall(
+        slug,
+        coreVersion === 'latest' ? null : coreVersion,
+        preferredVersion
+      );
 
       const zipPath = path.join(workRoot, `${slug}-${resolved.targetVersion}.zip`);
       log(`Downloading ${resolved.name} (${resolved.targetVersion})...`);
@@ -461,6 +1031,19 @@ async function runBuildJob(job, payload) {
         source: 'upload',
         filename
       });
+    }
+
+    if (
+      spec.wpConfig.dbName ||
+      spec.wpConfig.dbUser ||
+      spec.wpConfig.dbPassword ||
+      spec.wpConfig.dbHost ||
+      spec.wpConfig.dbPrefix ||
+      spec.wpConfig.wpHome ||
+      spec.wpConfig.wpSiteurl
+    ) {
+      log('Applying wp-config.php overrides...');
+      await applyWpConfigOverrides(wpRoot, spec.wpConfig, log);
     }
 
     const backendLogoFile = await saveBase64File(
@@ -503,8 +1086,17 @@ async function runBuildJob(job, payload) {
       buildId,
       generatedAt: new Date().toISOString(),
       wordpressVersion: coreVersion,
+      sourceMode: spec.source.mode,
       pluginCount: installedPlugins.length,
       installedPlugins,
+      wpConfig: {
+        dbName: spec.wpConfig.dbName,
+        dbUser: spec.wpConfig.dbUser,
+        dbHost: spec.wpConfig.dbHost,
+        dbPrefix: spec.wpConfig.dbPrefix,
+        wpHome: spec.wpConfig.wpHome,
+        wpSiteurl: spec.wpConfig.wpSiteurl
+      },
       branding: {
         backendBrandName: brandingConfig.backendBrandName,
         frontendSiteTitle: brandingConfig.frontendSiteTitle,
@@ -521,9 +1113,21 @@ async function runBuildJob(job, payload) {
 
     const outputZipName = `customwp-${buildId}.zip`;
     const outputZipPath = path.join(BUILD_DIR, outputZipName);
+    const zipRootName = 'wordpress';
+    let zipCwd = path.dirname(wpRoot);
+    let zipTarget = path.basename(wpRoot);
+
+    if (zipTarget !== zipRootName) {
+      const packageRoot = path.join(workRoot, 'package-root');
+      const normalizedRoot = path.join(packageRoot, zipRootName);
+      await fsp.mkdir(packageRoot, { recursive: true });
+      await fsp.cp(wpRoot, normalizedRoot, { recursive: true });
+      zipCwd = packageRoot;
+      zipTarget = zipRootName;
+    }
 
     log('Compressing build artifact...');
-    await runCommand('zip', ['-qr', outputZipPath, 'wordpress'], { cwd: workRoot });
+    await runCommand('zip', ['-qr', outputZipPath, zipTarget], { cwd: zipCwd });
 
     job.status = 'completed';
     job.completedAt = new Date().toISOString();
@@ -645,8 +1249,49 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const resolved = await resolvePluginForInstall(body.slug, body.wpVersion || null);
+    const resolved = await resolvePluginForInstall(
+      body.slug,
+      body.wpVersion || null,
+      body.preferredVersion || null
+    );
     sendJson(res, 200, { plugin: resolved });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/live/import') {
+    const body = await readJsonBody(req);
+    const imported = await importLiveSiteProfile(body);
+    sendJson(res, 200, imported);
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/live/apply') {
+    const body = await readJsonBody(req);
+    const result = await applyLiveSiteSettings(body);
+    sendJson(res, 200, result);
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/live/apply-backend-branding') {
+    const body = await readJsonBody(req);
+    const result = await applyBackendBrandingToLiveSite(body);
+    sendJson(res, 200, result);
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/live/branding-plugin') {
+    const build = await buildLiveBrandingPluginZip();
+    try {
+      const stat = await fsp.stat(build.zipPath);
+      res.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Length': stat.size,
+        'Content-Disposition': 'attachment; filename="customwp-live-branding.zip"'
+      });
+      fs.createReadStream(build.zipPath).pipe(res);
+    } finally {
+      await fsp.rm(build.workRoot, { recursive: true, force: true });
+    }
     return;
   }
 
