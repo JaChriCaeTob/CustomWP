@@ -7,7 +7,7 @@ const { spawn } = require('child_process');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 4000;
 const HOST = process.env.HOST || '127.0.0.1';
 const ROOT = process.cwd();
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -607,7 +607,24 @@ add_action('wp_body_open', function () {
   echo '</div>';
 }, 2);
 
-function customwp_snapshot_should_skip($relative) {
+function customwp_snapshot_normalize_excludes($raw) {
+  if (!is_string($raw) || $raw === '') {
+    return array();
+  }
+  $raw = str_replace(array("\\r", "\\n"), "\n", $raw);
+  $parts = preg_split('/[\n,]+/', $raw);
+  $clean = array();
+  foreach ($parts as $part) {
+    $part = trim($part);
+    if ($part === '') {
+      continue;
+    }
+    $clean[] = trim($part, '/');
+  }
+  return $clean;
+}
+
+function customwp_snapshot_should_skip($relative, $excludes = array()) {
   $relative = str_replace('\\\\', '/', $relative);
   $skip_prefixes = array(
     '.git/',
@@ -623,10 +640,20 @@ function customwp_snapshot_should_skip($relative) {
     }
   }
 
+  foreach ($excludes as $exclude) {
+    $exclude = trim($exclude);
+    if ($exclude === '') {
+      continue;
+    }
+    if (strpos($relative, $exclude) === 0) {
+      return true;
+    }
+  }
+
   return false;
 }
 
-function customwp_snapshot_build_zip() {
+function customwp_snapshot_build_zip($excludes = array(), $max_bytes = 0) {
   if (!class_exists('ZipArchive')) {
     return new WP_Error('customwp_zip_missing', 'ZipArchive is not available on this server.');
   }
@@ -652,6 +679,7 @@ function customwp_snapshot_build_zip() {
     return new WP_Error('customwp_zip_open_failed', 'Unable to create snapshot ZIP.');
   }
 
+  $file_count = 0;
   $iterator = new RecursiveIteratorIterator(
     new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
     RecursiveIteratorIterator::SELF_FIRST
@@ -662,7 +690,7 @@ function customwp_snapshot_build_zip() {
     $relative = ltrim(str_replace($root, '', $file_path), DIRECTORY_SEPARATOR);
     $relative = str_replace('\\\\', '/', $relative);
 
-    if ($relative === '' || customwp_snapshot_should_skip($relative)) {
+    if ($relative === '' || customwp_snapshot_should_skip($relative, $excludes)) {
       continue;
     }
 
@@ -670,11 +698,25 @@ function customwp_snapshot_build_zip() {
       $zip->addEmptyDir($relative);
     } else {
       $zip->addFile($file_path, $relative);
+      $file_count += 1;
     }
   }
 
   $zip->close();
-  return $zip_path;
+
+  if ($max_bytes > 0 && file_exists($zip_path)) {
+    $size = filesize($zip_path);
+    if ($size > $max_bytes) {
+      unlink($zip_path);
+      return new WP_Error('customwp_snapshot_too_large', 'Snapshot exceeds max size.');
+    }
+  }
+
+  return array(
+    'path' => $zip_path,
+    'file_count' => $file_count,
+    'size_bytes' => file_exists($zip_path) ? filesize($zip_path) : 0
+  );
 }
 
 add_action('rest_api_init', function () {
@@ -683,22 +725,115 @@ add_action('rest_api_init', function () {
     'permission_callback' => function () {
       return current_user_can('manage_options');
     },
-    'callback' => function () {
-      $zip_path = customwp_snapshot_build_zip();
-      if (is_wp_error($zip_path)) {
-        return $zip_path;
+    'callback' => function ($request) {
+      $exclude_raw = $request->get_param('exclude');
+      $max_mb = intval($request->get_param('maxSizeMb'));
+      $max_bytes = $max_mb > 0 ? $max_mb * 1024 * 1024 : 0;
+      $excludes = customwp_snapshot_normalize_excludes($exclude_raw);
+      $result = customwp_snapshot_build_zip($excludes, $max_bytes);
+      if (is_wp_error($result)) {
+        return $result;
       }
-      if (!file_exists($zip_path)) {
+      if (!is_array($result) || empty($result['path']) || !file_exists($result['path'])) {
         return new WP_Error('customwp_snapshot_missing', 'Snapshot ZIP not found.');
       }
 
+      $zip_path = $result['path'];
       $filename = basename($zip_path);
       nocache_headers();
+      header('X-CustomWP-File-Count: ' . intval($result['file_count'] ?? 0));
+      header('X-CustomWP-Zip-Size: ' . intval($result['size_bytes'] ?? 0));
       header('Content-Type: application/zip');
       header('Content-Disposition: attachment; filename="' . $filename . '"');
       header('Content-Length: ' . filesize($zip_path));
       readfile($zip_path);
       unlink($zip_path);
+      exit;
+    }
+  ));
+});
+
+function customwp_db_export_build_sql() {
+  global $wpdb;
+  $uploads = wp_upload_dir();
+  if (empty($uploads['basedir'])) {
+    return new WP_Error('customwp_uploads_missing', 'Uploads directory is not available.');
+  }
+
+  $export_dir = trailingslashit($uploads['basedir']) . 'customwp';
+  if (!file_exists($export_dir)) {
+    wp_mkdir_p($export_dir);
+  }
+
+  $file_path = trailingslashit($export_dir) . 'customwp-db-' . gmdate('Ymd-His') . '.sql';
+  $handle = fopen($file_path, 'w');
+  if (!$handle) {
+    return new WP_Error('customwp_db_export_failed', 'Unable to create export file.');
+  }
+
+  fwrite($handle, "-- CustomWP DB Export\n");
+  fwrite($handle, "-- Generated at " . gmdate('c') . "\n\n");
+
+  $tables = $wpdb->get_col('SHOW TABLES');
+  foreach ($tables as $table) {
+    $create = $wpdb->get_row("SHOW CREATE TABLE \`$table\`", ARRAY_N);
+    if ($create && isset($create[1])) {
+      fwrite($handle, "DROP TABLE IF EXISTS \`$table\`;\n");
+      fwrite($handle, $create[1] . ";\n\n");
+    }
+
+    $rows = $wpdb->get_results("SELECT * FROM \`$table\`", ARRAY_A);
+    foreach ($rows as $row) {
+      $values = array();
+      foreach ($row as $value) {
+        if ($value === null) {
+          $values[] = 'NULL';
+        } else {
+          $escaped = str_replace(
+            array("\\", "'", "\n", "\r", "\0", "\x1a"),
+            array("\\\\", "\\'", "\\n", "\\r", "\\0", "\\Z"),
+            (string) $value
+          );
+          $values[] = "'" . $escaped . "'";
+        }
+      }
+      $columns = array_map(function ($col) {
+        return "\`$col\`";
+      }, array_keys($row));
+      fwrite(
+        $handle,
+        "INSERT INTO \`$table\` (" . implode(', ', $columns) . ") VALUES (" . implode(', ', $values) . ");\n"
+      );
+    }
+    fwrite($handle, "\n");
+  }
+
+  fclose($handle);
+  return $file_path;
+}
+
+add_action('rest_api_init', function () {
+  register_rest_route('customwp/v1', '/db-export', array(
+    'methods' => 'GET',
+    'permission_callback' => function () {
+      return current_user_can('manage_options');
+    },
+    'callback' => function () {
+      $file_path = customwp_db_export_build_sql();
+      if (is_wp_error($file_path)) {
+        return $file_path;
+      }
+      if (!file_exists($file_path)) {
+        return new WP_Error('customwp_db_missing', 'DB export not found.');
+      }
+
+      $filename = basename($file_path);
+      nocache_headers();
+      header('Content-Type: application/sql');
+      header('Content-Disposition: attachment; filename="' . $filename . '"');
+      header('Content-Length: ' . filesize($file_path));
+      readfile($file_path);
+      unlink($file_path);
       exit;
     }
   ));
@@ -771,10 +906,36 @@ function parseFilenameFromContentDisposition(header) {
   return match?.groups?.name || null;
 }
 
+async function checkLiveSiteHealth(body) {
+  const siteUrl = normalizeSiteUrl(body.siteUrl);
+  const authHeader = buildBasicAuthHeader(body.username, body.appPassword);
+  const user = await fetchJsonWithAuth(joinSiteUrl(siteUrl, '/wp-json/wp/v2/users/me?context=edit'), authHeader);
+  const root = await fetchJsonWithAuth(joinSiteUrl(siteUrl, '/wp-json'), authHeader);
+
+  return {
+    siteUrl,
+    userDisplayName: user?.name || user?.username || '',
+    wpVersion: root?.generator || root?.name || ''
+  };
+}
+
 async function downloadLiveSnapshotZip(body) {
   const siteUrl = normalizeSiteUrl(body.siteUrl);
   const authHeader = buildBasicAuthHeader(body.username, body.appPassword);
-  const response = await fetch(joinSiteUrl(siteUrl, '/wp-json/customwp/v1/snapshot'), {
+  const snapshotOptions = body.snapshotOptions && typeof body.snapshotOptions === 'object' ? body.snapshotOptions : {};
+  const query = new URLSearchParams();
+  if (Array.isArray(snapshotOptions.excludes) && snapshotOptions.excludes.length) {
+    query.set('exclude', snapshotOptions.excludes.join('\n'));
+  }
+  if (snapshotOptions.maxSizeMb) {
+    query.set('maxSizeMb', String(snapshotOptions.maxSizeMb));
+  }
+  const snapshotUrl = joinSiteUrl(
+    siteUrl,
+    `/wp-json/customwp/v1/snapshot${query.toString() ? `?${query.toString()}` : ''}`
+  );
+
+  const response = await fetch(snapshotUrl, {
     headers: {
       Authorization: authHeader
     }
@@ -797,6 +958,40 @@ async function downloadLiveSnapshotZip(body) {
   return {
     siteUrl,
     snapshotZip: {
+      filename,
+      dataBase64: Buffer.from(arrayBuffer).toString('base64')
+    },
+    sizeBytes: arrayBuffer.byteLength,
+    fileCount: parseInt(response.headers.get('x-customwp-file-count') || '0', 10) || 0
+  };
+}
+
+async function downloadLiveDbExport(body) {
+  const siteUrl = normalizeSiteUrl(body.siteUrl);
+  const authHeader = buildBasicAuthHeader(body.username, body.appPassword);
+  const response = await fetch(joinSiteUrl(siteUrl, '/wp-json/customwp/v1/db-export'), {
+    headers: {
+      Authorization: authHeader
+    }
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw createHttpError(
+        'CustomWP Live Branding Helper is not installed on the live site. Download it from /api/live/branding-plugin and install it first.',
+        404
+      );
+    }
+    throw createHttpError(`DB export failed (${response.status}).`, response.status);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const filename = parseFilenameFromContentDisposition(response.headers.get('content-disposition'))
+    || `customwp-db-${Date.now()}.sql`;
+
+  return {
+    siteUrl,
+    file: {
       filename,
       dataBase64: Buffer.from(arrayBuffer).toString('base64')
     },
@@ -846,6 +1041,32 @@ function buildPluginInfoUrl(action, params = {}) {
     search.set(key, value);
   }
   return `https://api.wordpress.org/plugins/info/1.2/?${search.toString()}`;
+}
+
+async function cleanupLocalFiles(days = 7) {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  let removed = 0;
+
+  async function cleanupDir(dir) {
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      try {
+        const stat = await fsp.stat(fullPath);
+        if (stat.mtimeMs < cutoff) {
+          await fsp.rm(fullPath, { recursive: true, force: true });
+          removed += 1;
+        }
+      } catch {
+        // ignore file errors
+      }
+    }
+  }
+
+  await cleanupDir(BUILD_DIR);
+  await cleanupDir(TMP_DIR);
+
+  return { removed };
 }
 
 async function getWordPressVersions() {
@@ -1590,6 +1811,13 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (req.method === 'POST' && pathname === '/api/live/health') {
+    const body = await readJsonBody(req);
+    const result = await checkLiveSiteHealth(body);
+    sendJson(res, 200, result);
+    return;
+  }
+
   if (req.method === 'POST' && pathname === '/api/live/apply') {
     const body = await readJsonBody(req);
     const result = await applyLiveSiteSettings(body);
@@ -1608,6 +1836,13 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const snapshot = await downloadLiveSnapshotZip(body);
     sendJson(res, 200, snapshot);
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/live/db-export') {
+    const body = await readJsonBody(req);
+    const exportResult = await downloadLiveDbExport(body);
+    sendJson(res, 200, exportResult);
     return;
   }
 
@@ -1651,6 +1886,14 @@ async function handleApi(req, res, url) {
     });
 
     sendJson(res, 202, { id, statusUrl: `/api/build/${id}` });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/cleanup') {
+    const body = await readJsonBody(req);
+    const days = Math.max(parseInt(body.days || '7', 10), 1);
+    const result = await cleanupLocalFiles(days);
+    sendJson(res, 200, result);
     return;
   }
 

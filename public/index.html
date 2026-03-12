@@ -52,8 +52,22 @@
           <button id="import-live-site" type="button">Import Site Snapshot</button>
           <button id="apply-live-branding" type="button">Apply Title/Tagline To Live Site</button>
           <button id="pull-live-snapshot" type="button">Pull Snapshot ZIP From Live Site</button>
+          <button id="check-live-auth" type="button">Check Live Auth</button>
+          <button id="download-live-db" type="button">Download DB Export (SQL)</button>
         </div>
         <p class="hint">Pulling a snapshot requires the CustomWP Live Branding Helper plugin installed on the live site.</p>
+        <div class="split-grid">
+          <div>
+            <label for="snapshot-excludes">Snapshot excludes (one per line)</label>
+            <textarea id="snapshot-excludes" rows="4" placeholder="wp-content/uploads/cache&#10;wp-content/cache"></textarea>
+          </div>
+          <div>
+            <label for="snapshot-max-size">Max snapshot size (MB, optional)</label>
+            <input id="snapshot-max-size" type="number" min="10" step="10" placeholder="500" />
+            <label for="snapshot-warn-size">Warn if snapshot over (MB)</label>
+            <input id="snapshot-warn-size" type="number" min="10" step="10" placeholder="250" />
+          </div>
+        </div>
         <label for="live-snapshot-zip">Current install snapshot ZIP</label>
         <input id="live-snapshot-zip" type="file" accept=".zip" />
         <p id="live-snapshot-zip-label" class="hint">No snapshot ZIP selected.</p>
@@ -131,6 +145,7 @@
           <button id="apply-live-branding-frontend" type="button">Apply Title/Tagline To Live Site</button>
         </div>
         <p class="hint">Uses the live-site credentials from the Import Running Site section.</p>
+        <div id="branding-preview" class="branding-preview" aria-live="polite"></div>
       </section>
 
       <section class="panel">
@@ -168,7 +183,25 @@
             <input id="import-profile" type="file" accept="application/json" hidden />
           </label>
         </div>
+        <div class="preset-group">
+          <h3>Presets</h3>
+          <div class="controls-inline wrap">
+            <button class="preset" data-preset="agency" type="button">Agency Starter</button>
+            <button class="preset" data-preset="blog" type="button">Blog Builder</button>
+            <button class="preset" data-preset="commerce" type="button">E-commerce Stack</button>
+          </div>
+        </div>
         <div id="validation-output" class="results"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Download History</h2>
+        <div id="download-history" class="results"></div>
+        <div class="controls-inline wrap">
+          <button id="clear-history" type="button">Clear History</button>
+          <button id="cleanup-local-builds" type="button">Clean Local Builds</button>
+        </div>
+        <p class="hint">Cleanup deletes old files from local builds and temp folders.</p>
       </section>
 
       <section class="panel build-panel">

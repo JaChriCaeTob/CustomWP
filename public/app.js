@@ -19,12 +19,17 @@ const els = {
   liveSiteUsername: document.getElementById('live-site-username'),
   liveSiteAppPassword: document.getElementById('live-site-app-password'),
   themeToggle: document.getElementById('theme-toggle'),
+  checkLiveAuth: document.getElementById('check-live-auth'),
+  downloadLiveDb: document.getElementById('download-live-db'),
   importLiveSite: document.getElementById('import-live-site'),
   applyLiveBranding: document.getElementById('apply-live-branding'),
   pullLiveSnapshot: document.getElementById('pull-live-snapshot'),
   liveSnapshotZip: document.getElementById('live-snapshot-zip'),
   liveSnapshotZipLabel: document.getElementById('live-snapshot-zip-label'),
   liveSiteOutput: document.getElementById('live-site-output'),
+  snapshotExcludes: document.getElementById('snapshot-excludes'),
+  snapshotMaxSize: document.getElementById('snapshot-max-size'),
+  snapshotWarnSize: document.getElementById('snapshot-warn-size'),
   wpVersion: document.getElementById('wp-version'),
   pluginQuery: document.getElementById('plugin-query'),
   searchPlugins: document.getElementById('search-plugins'),
@@ -56,6 +61,10 @@ const els = {
   exportProfile: document.getElementById('export-profile'),
   importProfile: document.getElementById('import-profile'),
   validationOutput: document.getElementById('validation-output'),
+  brandingPreview: document.getElementById('branding-preview'),
+  downloadHistory: document.getElementById('download-history'),
+  clearHistory: document.getElementById('clear-history'),
+  cleanupLocalBuilds: document.getElementById('cleanup-local-builds'),
   startBuild: document.getElementById('start-build'),
   buildStatus: document.getElementById('build-status'),
   buildLogs: document.getElementById('build-logs'),
@@ -191,6 +200,81 @@ function getLiveAuthPayload() {
   };
 }
 
+function parseExcludeList(raw) {
+  return String(raw || '')
+    .split(/\r?\n|,/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function getSnapshotOptions() {
+  return {
+    excludes: parseExcludeList(els.snapshotExcludes?.value),
+    maxSizeMb: Number(els.snapshotMaxSize?.value) || null,
+    warnSizeMb: Number(els.snapshotWarnSize?.value) || null
+  };
+}
+
+function buildSiteKey() {
+  return `customwp-last-snapshot:${els.liveSiteUrl.value.trim() || 'default'}`;
+}
+
+function getLastSnapshot() {
+  try {
+    const raw = localStorage.getItem(buildSiteKey());
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function setLastSnapshot(data) {
+  localStorage.setItem(buildSiteKey(), JSON.stringify(data));
+}
+
+function getHistory() {
+  try {
+    const raw = localStorage.getItem('customwp-history');
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function setHistory(items) {
+  localStorage.setItem('customwp-history', JSON.stringify(items));
+}
+
+function addHistoryItem(item) {
+  const items = getHistory();
+  items.unshift(item);
+  setHistory(items.slice(0, 50));
+  renderHistory();
+}
+
+function renderHistory() {
+  if (!els.downloadHistory) return;
+  const items = getHistory();
+  if (!items.length) {
+    els.downloadHistory.innerHTML = '<span class="hint">No downloads yet.</span>';
+    return;
+  }
+
+  els.downloadHistory.innerHTML = items
+    .map((item) => `
+      <article class="plugin-card">
+        <div class="title">
+          <h4>${escapeHtml(item.label || 'Download')}</h4>
+          <span class="compat compatible">${escapeHtml(item.type || 'file')}</span>
+        </div>
+        <p><strong>File:</strong> ${escapeHtml(item.filename || 'n/a')}</p>
+        <p><strong>Size:</strong> ${escapeHtml(formatBytes(item.sizeBytes || 0))}</p>
+        <p class="preview-meta">${escapeHtml(item.timestamp || '')}</p>
+      </article>
+    `)
+    .join('');
+}
+
 async function applyBackendBrandingToLiveSite() {
   const auth = getLiveAuthPayload();
   els.liveSiteOutput.innerHTML = '<span class="hint">Applying backend branding to live site...</span>';
@@ -266,6 +350,7 @@ function applyProfileData(data, message = 'Profile loaded.') {
   els.wpSiteurl.value = wpConfig.wpSiteurl || '';
 
   els.validationOutput.innerHTML = `<span class="hint">${escapeHtml(message)}</span>`;
+  updateBrandingPreview();
 }
 
 function renderLiveSiteResult(imported) {
@@ -302,13 +387,38 @@ async function importLiveSiteSnapshot() {
   renderLiveSiteResult(imported);
 }
 
+async function checkLiveAuth() {
+  const auth = getLiveAuthPayload();
+  els.liveSiteOutput.innerHTML = '<span class="hint">Checking live site credentials...</span>';
+
+  const response = await api('/api/live/health', {
+    method: 'POST',
+    body: JSON.stringify(auth)
+  });
+
+  els.liveSiteOutput.innerHTML = `
+    <article class="plugin-card">
+      <div class="title">
+        <h4>${escapeHtml(response.siteUrl || 'Live site')}</h4>
+        <span class="compat compatible">ok</span>
+      </div>
+      <p><strong>User:</strong> ${escapeHtml(response.userDisplayName || 'n/a')}</p>
+      <p><strong>WordPress:</strong> ${escapeHtml(response.wpVersion || 'unknown')}</p>
+    </article>
+  `;
+}
+
 async function pullLiveSnapshotZip() {
   const auth = getLiveAuthPayload();
+  const snapshotOptions = getSnapshotOptions();
   els.liveSiteOutput.innerHTML = '<span class="hint">Downloading snapshot ZIP from live site...</span>';
 
   const response = await api('/api/live/snapshot', {
     method: 'POST',
-    body: JSON.stringify(auth)
+    body: JSON.stringify({
+      ...auth,
+      snapshotOptions
+    })
   });
 
   state.snapshotZip = response.snapshotZip || null;
@@ -318,8 +428,27 @@ async function pullLiveSnapshotZip() {
     if (state.snapshotZip?.dataBase64) {
       triggerDownloadFromBase64(state.snapshotZip.dataBase64, state.snapshotZip.filename);
     }
+
+    addHistoryItem({
+      type: 'snapshot',
+      label: 'Snapshot',
+      filename: state.snapshotZip.filename,
+      sizeBytes: response.sizeBytes || 0,
+      timestamp: new Date().toLocaleString()
+    });
   } else {
     els.liveSnapshotZipLabel.textContent = 'Snapshot download failed.';
+  }
+
+  const last = getLastSnapshot();
+  const fileCount = response.fileCount || 0;
+  const sizeBytes = response.sizeBytes || 0;
+  const sizeWarning = snapshotOptions.warnSizeMb && sizeBytes > snapshotOptions.warnSizeMb * 1024 * 1024
+    ? `<p class="hint">Warning: snapshot is larger than ${escapeHtml(snapshotOptions.warnSizeMb)} MB.</p>`
+    : '';
+
+  if (sizeBytes || fileCount) {
+    setLastSnapshot({ sizeBytes, fileCount, timestamp: new Date().toISOString() });
   }
 
   els.liveSiteOutput.innerHTML = `
@@ -329,6 +458,45 @@ async function pullLiveSnapshotZip() {
         <span class="compat compatible">ready</span>
       </div>
       <p><strong>Snapshot:</strong> ${escapeHtml(state.snapshotZip?.filename || 'n/a')}</p>
+      <p><strong>Size:</strong> ${escapeHtml(formatBytes(response.sizeBytes || 0))}</p>
+      <p><strong>Files:</strong> ${escapeHtml(String(response.fileCount || 0))}</p>
+      ${
+        last
+          ? `<p class="preview-meta">Δ size: ${escapeHtml(formatBytes((response.sizeBytes || 0) - (last.sizeBytes || 0)))} | Δ files: ${escapeHtml(String((response.fileCount || 0) - (last.fileCount || 0)))}</p>`
+          : ''
+      }
+    </article>
+    ${sizeWarning}
+  `;
+}
+
+async function downloadLiveDbExport() {
+  const auth = getLiveAuthPayload();
+  els.liveSiteOutput.innerHTML = '<span class="hint">Generating database export...</span>';
+
+  const response = await api('/api/live/db-export', {
+    method: 'POST',
+    body: JSON.stringify(auth)
+  });
+
+  if (response?.file?.dataBase64) {
+    triggerDownloadFromBase64(response.file.dataBase64, response.file.filename);
+    addHistoryItem({
+      type: 'db-export',
+      label: 'Database Export',
+      filename: response.file.filename,
+      sizeBytes: response.sizeBytes || 0,
+      timestamp: new Date().toLocaleString()
+    });
+  }
+
+  els.liveSiteOutput.innerHTML = `
+    <article class="plugin-card">
+      <div class="title">
+        <h4>${escapeHtml(response.siteUrl || 'DB export')}</h4>
+        <span class="compat compatible">ready</span>
+      </div>
+      <p><strong>File:</strong> ${escapeHtml(response.file?.filename || 'n/a')}</p>
       <p><strong>Size:</strong> ${escapeHtml(formatBytes(response.sizeBytes || 0))}</p>
     </article>
   `;
@@ -556,6 +724,49 @@ function getPayload() {
   };
 }
 
+function updateBrandingPreview() {
+  if (!els.brandingPreview) return;
+  const siteTitle = els.frontendSiteTitle.value || 'Site Title';
+  const tagline = els.frontendTagline.value || 'Tagline preview';
+  const accent = els.accentColor.value || '#136f63';
+  const logo = state.frontendLogo?.dataBase64
+    ? `data:image/*;base64,${state.frontendLogo.dataBase64}`
+    : null;
+
+  els.brandingPreview.innerHTML = `
+    <div class="preview-header">
+      <div class="preview-logo">${logo ? `<img src="${logo}" alt="logo" />` : '<span>Logo</span>'}</div>
+      <div>
+        <strong>${escapeHtml(siteTitle)}</strong>
+        <div class="preview-meta">${escapeHtml(tagline)}</div>
+      </div>
+    </div>
+    <div class="preview-body">
+      <div class="preview-accent" style="background:${escapeHtml(accent)}"></div>
+      <div class="preview-meta">Accent: ${escapeHtml(accent)}</div>
+    </div>
+  `;
+}
+
+function getPluginConflicts(plugins) {
+  const slugs = new Set(plugins.map((p) => p.slug));
+  const warnings = [];
+
+  const pair = (a, b, reason) => {
+    if (slugs.has(a) && slugs.has(b)) {
+      warnings.push({ title: `${a} + ${b}`, reason });
+    }
+  };
+
+  pair('wordpress-seo', 'seo-by-rank-math', 'Two SEO suites enabled at once.');
+  pair('wordpress-seo', 'all-in-one-seo-pack', 'Two SEO suites enabled at once.');
+  pair('wp-super-cache', 'w3-total-cache', 'Multiple full-page cache plugins.');
+  pair('wp-super-cache', 'wp-rocket', 'Multiple full-page cache plugins.');
+  pair('wordfence', 'sucuri-scanner', 'Multiple security suites enabled.');
+
+  return warnings;
+}
+
 async function validatePlugins() {
   if (state.selectedPlugins.length === 0) {
     els.validationOutput.innerHTML = '<span class="hint">Add at least one plugin first.</span>';
@@ -591,7 +802,19 @@ async function validatePlugins() {
     }
   }
 
-  els.validationOutput.innerHTML = results
+  const conflicts = getPluginConflicts(state.selectedPlugins);
+  const conflictCards = conflicts.map((conflict) => `
+    <article class="plugin-card">
+      <div class="title">
+        <h4>${escapeHtml(conflict.title)}</h4>
+        <span class="compat untested">warning</span>
+      </div>
+      <p>${escapeHtml(conflict.reason)}</p>
+    </article>
+  `);
+
+  els.validationOutput.innerHTML = conflictCards
+    .concat(results
     .map((result) => `
       <article class="plugin-card">
         <div class="title">
@@ -602,6 +825,7 @@ async function validatePlugins() {
         <p>${result.ok ? `<strong>Version to install:</strong> ${escapeHtml(result.version)}` : ''}</p>
       </article>
     `)
+    )
     .join('');
 }
 
@@ -644,6 +868,14 @@ async function pollBuild(id) {
         els.downloadLink.href = job.artifact.downloadUrl;
         els.downloadLink.hidden = false;
         clearInterval(state.pollTimer);
+
+        addHistoryItem({
+          type: 'build',
+          label: 'Build',
+          filename: job.artifact?.filename || 'customwp-build.zip',
+          sizeBytes: job.artifact?.sizeBytes || 0,
+          timestamp: new Date().toLocaleString()
+        });
       }
 
       if (job.status === 'failed') {
@@ -687,6 +919,18 @@ function registerEvents() {
   els.applyLiveBranding.addEventListener('click', () => {
     applyCurrentBrandingToLiveSite().catch((error) => {
       els.liveSiteOutput.innerHTML = `<span class="hint">Apply error: ${escapeHtml(error.message)}</span>`;
+    });
+  });
+
+  els.checkLiveAuth.addEventListener('click', () => {
+    checkLiveAuth().catch((error) => {
+      els.liveSiteOutput.innerHTML = `<span class="hint">Auth error: ${escapeHtml(error.message)}</span>`;
+    });
+  });
+
+  els.downloadLiveDb.addEventListener('click', () => {
+    downloadLiveDbExport().catch((error) => {
+      els.liveSiteOutput.innerHTML = `<span class="hint">DB export error: ${escapeHtml(error.message)}</span>`;
     });
   });
 
@@ -754,12 +998,14 @@ function registerEvents() {
     handleImageFile(els.backendLoginLogo, 'backendLoginLogo', els.backendLoginLogoLabel).catch((error) => {
       els.backendLoginLogoLabel.textContent = error.message;
     });
+    updateBrandingPreview();
   });
 
   els.frontendLogo.addEventListener('change', () => {
     handleImageFile(els.frontendLogo, 'frontendLogo', els.frontendLogoLabel).catch((error) => {
       els.frontendLogoLabel.textContent = error.message;
     });
+    updateBrandingPreview();
   });
 
   document.querySelectorAll('.bundle').forEach((button) => {
@@ -789,6 +1035,91 @@ function registerEvents() {
       setBuildStatus(`Error: ${error.message}`, 'failed');
     });
   });
+
+  document.querySelectorAll('.preset').forEach((button) => {
+    button.addEventListener('click', () => {
+      const preset = button.dataset.preset;
+      applyPreset(preset);
+    });
+  });
+
+  els.clearHistory.addEventListener('click', () => {
+    setHistory([]);
+    renderHistory();
+  });
+
+  els.cleanupLocalBuilds.addEventListener('click', () => {
+    cleanupLocalBuilds().catch((error) => {
+      els.validationOutput.innerHTML = `<span class="hint">Cleanup error: ${escapeHtml(error.message)}</span>`;
+    });
+  });
+
+  [els.frontendSiteTitle, els.frontendTagline, els.accentColor, els.customCss].forEach((input) => {
+    if (!input) return;
+    input.addEventListener('input', updateBrandingPreview);
+  });
+}
+
+function applyPreset(name) {
+  const presets = {
+    agency: {
+      branding: {
+        backendBrandName: 'Agency CMS',
+        backendFooterText: 'Built by your agency',
+        frontendSiteTitle: 'Agency Starter',
+        frontendTagline: 'Launch faster with a proven stack',
+        accentColor: '#136f63',
+        customCss: ''
+      },
+      plugins: ['wordpress-seo', 'wp-super-cache', 'wordfence']
+    },
+    blog: {
+      branding: {
+        backendBrandName: 'Blog Studio',
+        backendFooterText: 'Publishing stack',
+        frontendSiteTitle: 'Modern Blog',
+        frontendTagline: 'Clarity in every post',
+        accentColor: '#3b6caa',
+        customCss: ''
+      },
+      plugins: ['wordpress-seo', 'wp-super-cache', 'classic-editor']
+    },
+    commerce: {
+      branding: {
+        backendBrandName: 'Commerce Suite',
+        backendFooterText: 'E-commerce stack',
+        frontendSiteTitle: 'Shop Starter',
+        frontendTagline: 'Sell beautifully, scale smoothly',
+        accentColor: '#8f4cf6',
+        customCss: ''
+      },
+      plugins: ['woocommerce', 'woocommerce-payments', 'wordpress-seo']
+    }
+  };
+
+  const preset = presets[name];
+  if (!preset) return;
+
+  state.selectedPlugins = preset.plugins.map((slug) => ({ slug, version: '' }));
+  renderSelectedPlugins();
+
+  els.backendBrandName.value = preset.branding.backendBrandName;
+  els.backendFooterText.value = preset.branding.backendFooterText;
+  els.frontendSiteTitle.value = preset.branding.frontendSiteTitle;
+  els.frontendTagline.value = preset.branding.frontendTagline;
+  els.accentColor.value = preset.branding.accentColor;
+  els.customCss.value = preset.branding.customCss;
+
+  updateBrandingPreview();
+}
+
+async function cleanupLocalBuilds() {
+  const response = await api('/api/cleanup', {
+    method: 'POST',
+    body: JSON.stringify({ days: 7 })
+  });
+
+  els.validationOutput.innerHTML = `<span class="hint">Cleanup: removed ${escapeHtml(String(response.removed || 0))} files.</span>`;
 }
 
 async function boot() {
@@ -796,6 +1127,8 @@ async function boot() {
   renderUploadedPlugins();
   registerEvents();
   initThemeToggle();
+  renderHistory();
+  updateBrandingPreview();
   await loadVersions();
 }
 

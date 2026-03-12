@@ -163,6 +163,13 @@ button.primary {
   padding: 0.62rem 0.72rem;
 }
 
+.split-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-bottom: 0.8rem;
+}
+
 .hint {
   margin: 0.45rem 0 0.7rem;
   font-size: 0.84rem;
@@ -200,6 +207,61 @@ button.primary {
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.35;
+}
+
+.branding-preview {
+  margin-top: 0.8rem;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.branding-preview .preview-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.branding-preview .preview-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.branding-preview .preview-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.branding-preview .preview-body {
+  padding: 0.8rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.branding-preview .preview-accent {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.branding-preview .preview-meta {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.preset-group {
+  margin-bottom: 0.8rem;
 }
 
 .compat {
