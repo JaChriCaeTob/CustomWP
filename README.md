@@ -51,6 +51,9 @@ Open [http://127.0.0.1:3000](http://127.0.0.1:3000).
     - installed plugin slugs/versions (when endpoint allows)
     - title and tagline
   - Prefills builder fields.
+- `Pull Snapshot ZIP From Live Site`
+  - Downloads a filesystem snapshot directly from the live site.
+  - Requires the CustomWP Live Branding Helper plugin to be installed.
 - `Apply Title/Tagline To Live Site`
   - Pushes current builder title/tagline values back to live site via `/wp-json/wp/v2/settings`.
 - `Current install snapshot ZIP`
@@ -87,6 +90,8 @@ Open [http://127.0.0.1:3000](http://127.0.0.1:3000).
   - Sends backend branding to the live site using the CustomWP Live Branding Helper plugin.
 - `Download Live Branding Helper`
   - Downloads a helper plugin ZIP to install on the live site (Plugins → Add New → Upload Plugin).
+- `Live Branding Settings`
+  - The helper plugin adds **Settings → CustomWP Branding** for managing branding and downloading snapshots.
 
 ### 4) Frontend Branding
 

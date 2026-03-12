@@ -20,6 +20,7 @@ const els = {
   liveSiteAppPassword: document.getElementById('live-site-app-password'),
   importLiveSite: document.getElementById('import-live-site'),
   applyLiveBranding: document.getElementById('apply-live-branding'),
+  pullLiveSnapshot: document.getElementById('pull-live-snapshot'),
   liveSnapshotZip: document.getElementById('live-snapshot-zip'),
   liveSnapshotZipLabel: document.getElementById('live-snapshot-zip-label'),
   liveSiteOutput: document.getElementById('live-site-output'),
@@ -91,6 +92,14 @@ function prettyStatus(status) {
   if (status === 'completed') return 'Build completed';
   if (status === 'failed') return 'Build failed';
   return 'Idle';
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  const kb = bytes / 1024;
+  return `${kb.toFixed(1)} KB`;
 }
 
 function setBuildStatus(message, type = 'info') {
@@ -229,6 +238,35 @@ async function importLiveSiteSnapshot() {
   els.buildSourceMode.value = 'snapshot';
   applyProfileData(imported.profile, 'Imported live site snapshot into the builder.');
   renderLiveSiteResult(imported);
+}
+
+async function pullLiveSnapshotZip() {
+  const auth = getLiveAuthPayload();
+  els.liveSiteOutput.innerHTML = '<span class="hint">Downloading snapshot ZIP from live site...</span>';
+
+  const response = await api('/api/live/snapshot', {
+    method: 'POST',
+    body: JSON.stringify(auth)
+  });
+
+  state.snapshotZip = response.snapshotZip || null;
+  if (state.snapshotZip?.filename) {
+    els.buildSourceMode.value = 'snapshot';
+    els.liveSnapshotZipLabel.textContent = `Downloaded snapshot: ${state.snapshotZip.filename}`;
+  } else {
+    els.liveSnapshotZipLabel.textContent = 'Snapshot download failed.';
+  }
+
+  els.liveSiteOutput.innerHTML = `
+    <article class="plugin-card">
+      <div class="title">
+        <h4>${escapeHtml(response.siteUrl || 'Snapshot downloaded')}</h4>
+        <span class="compat compatible">ready</span>
+      </div>
+      <p><strong>Snapshot:</strong> ${escapeHtml(state.snapshotZip?.filename || 'n/a')}</p>
+      <p><strong>Size:</strong> ${escapeHtml(formatBytes(response.sizeBytes || 0))}</p>
+    </article>
+  `;
 }
 
 async function applyCurrentBrandingToLiveSite() {
@@ -584,6 +622,12 @@ function registerEvents() {
   els.applyLiveBranding.addEventListener('click', () => {
     applyCurrentBrandingToLiveSite().catch((error) => {
       els.liveSiteOutput.innerHTML = `<span class="hint">Apply error: ${escapeHtml(error.message)}</span>`;
+    });
+  });
+
+  els.pullLiveSnapshot.addEventListener('click', () => {
+    pullLiveSnapshotZip().catch((error) => {
+      els.liveSiteOutput.innerHTML = `<span class="hint">Snapshot error: ${escapeHtml(error.message)}</span>`;
     });
   });
 

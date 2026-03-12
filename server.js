@@ -345,25 +345,54 @@ function generateLiveBrandingPluginPhp() {
   return `<?php
 /**
  * Plugin Name: CustomWP Live Branding Helper
- * Description: Applies CustomWP backend branding via REST.
- * Version: 1.0.0
+ * Description: Provides branding controls and snapshot export for CustomWP.
+ * Version: 1.1.0
  */
 
 if (!defined('ABSPATH')) {
   exit;
 }
 
-function customwp_live_branding_get_options() {
-  $options = get_option('customwp_live_branding', array());
-  return is_array($options) ? $options : array();
+function customwp_live_branding_defaults() {
+  return array(
+    'backendBrandName' => '',
+    'backendFooterText' => '',
+    'backendLoginLogoDataUrl' => '',
+    'frontendSiteTitle' => '',
+    'frontendTagline' => '',
+    'frontendLogoUrl' => '',
+    'accentColor' => '#2F6FED',
+    'customCss' => ''
+  );
 }
 
-function customwp_live_branding_set_options($payload) {
+function customwp_live_branding_get_options() {
+  $defaults = customwp_live_branding_defaults();
+  $options = get_option('customwp_live_branding', array());
+  $options = is_array($options) ? $options : array();
+  return array_merge($defaults, $options);
+}
+
+function customwp_live_branding_sanitize($payload) {
+  $accent = isset($payload['accentColor']) ? sanitize_hex_color($payload['accentColor']) : '';
+  if (!$accent) {
+    $accent = '#2F6FED';
+  }
   $data = array(
     'backendBrandName' => isset($payload['backendBrandName']) ? sanitize_text_field($payload['backendBrandName']) : '',
     'backendFooterText' => isset($payload['backendFooterText']) ? sanitize_text_field($payload['backendFooterText']) : '',
-    'backendLoginLogoDataUrl' => isset($payload['backendLoginLogoDataUrl']) ? esc_url_raw($payload['backendLoginLogoDataUrl']) : ''
+    'backendLoginLogoDataUrl' => isset($payload['backendLoginLogoDataUrl']) ? esc_url_raw($payload['backendLoginLogoDataUrl']) : '',
+    'frontendSiteTitle' => isset($payload['frontendSiteTitle']) ? sanitize_text_field($payload['frontendSiteTitle']) : '',
+    'frontendTagline' => isset($payload['frontendTagline']) ? sanitize_text_field($payload['frontendTagline']) : '',
+    'frontendLogoUrl' => isset($payload['frontendLogoUrl']) ? esc_url_raw($payload['frontendLogoUrl']) : '',
+    'accentColor' => $accent,
+    'customCss' => isset($payload['customCss']) ? wp_strip_all_tags($payload['customCss']) : ''
   );
+  return array_merge(customwp_live_branding_defaults(), $data);
+}
+
+function customwp_live_branding_set_options($payload) {
+  $data = customwp_live_branding_sanitize($payload);
   update_option('customwp_live_branding', $data, false);
   return $data;
 }
@@ -396,9 +425,111 @@ add_action('rest_api_init', function () {
   ));
 });
 
-add_action('login_enqueue_scripts', function () {
+function customwp_live_branding_value($key, $default = '') {
   $options = customwp_live_branding_get_options();
-  $logo = isset($options['backendLoginLogoDataUrl']) ? $options['backendLoginLogoDataUrl'] : '';
+  return isset($options[$key]) && $options[$key] !== '' ? $options[$key] : $default;
+}
+
+function customwp_live_branding_render_settings_page() {
+  if (!current_user_can('manage_options')) {
+    return;
+  }
+
+  $options = customwp_live_branding_get_options();
+  $snapshot_url = add_query_arg('_wpnonce', wp_create_nonce('wp_rest'), rest_url('customwp/v1/snapshot'));
+  ?>
+  <div class="wrap">
+    <h1>CustomWP Branding</h1>
+    <form method="post" action="options.php">
+      <?php settings_fields('customwp_live_branding'); ?>
+      <table class="form-table" role="presentation">
+        <tr>
+          <th scope="row"><label for="customwp_backendBrandName">Admin bar brand name</label></th>
+          <td><input name="customwp_live_branding[backendBrandName]" id="customwp_backendBrandName" type="text" class="regular-text" value="<?php echo esc_attr($options['backendBrandName']); ?>" /></td>
+        </tr>
+        <tr>
+          <th scope="row"><label for="customwp_backendFooterText">Admin footer text</label></th>
+          <td><input name="customwp_live_branding[backendFooterText]" id="customwp_backendFooterText" type="text" class="regular-text" value="<?php echo esc_attr($options['backendFooterText']); ?>" /></td>
+        </tr>
+        <tr>
+          <th scope="row"><label for="customwp_backendLoginLogoDataUrl">Login logo</label></th>
+          <td>
+            <input name="customwp_live_branding[backendLoginLogoDataUrl]" id="customwp_backendLoginLogoDataUrl" type="text" class="regular-text customwp-media-target" value="<?php echo esc_attr($options['backendLoginLogoDataUrl']); ?>" />
+            <button class="button customwp-media-select" data-target="customwp_backendLoginLogoDataUrl" type="button">Choose</button>
+            <p class="description">Pick an image from the media library or paste a URL.</p>
+          </td>
+        </tr>
+        <tr>
+          <th scope="row"><label for="customwp_frontendSiteTitle">Frontend site title override</label></th>
+          <td><input name="customwp_live_branding[frontendSiteTitle]" id="customwp_frontendSiteTitle" type="text" class="regular-text" value="<?php echo esc_attr($options['frontendSiteTitle']); ?>" /></td>
+        </tr>
+        <tr>
+          <th scope="row"><label for="customwp_frontendTagline">Frontend tagline</label></th>
+          <td><input name="customwp_live_branding[frontendTagline]" id="customwp_frontendTagline" type="text" class="regular-text" value="<?php echo esc_attr($options['frontendTagline']); ?>" /></td>
+        </tr>
+        <tr>
+          <th scope="row"><label for="customwp_frontendLogoUrl">Frontend logo</label></th>
+          <td>
+            <input name="customwp_live_branding[frontendLogoUrl]" id="customwp_frontendLogoUrl" type="text" class="regular-text customwp-media-target" value="<?php echo esc_attr($options['frontendLogoUrl']); ?>" />
+            <button class="button customwp-media-select" data-target="customwp_frontendLogoUrl" type="button">Choose</button>
+            <p class="description">Used in the frontend header bar injected by the plugin.</p>
+          </td>
+        </tr>
+        <tr>
+          <th scope="row"><label for="customwp_accentColor">Accent color</label></th>
+          <td><input name="customwp_live_branding[accentColor]" id="customwp_accentColor" type="text" class="regular-text" value="<?php echo esc_attr($options['accentColor']); ?>" /></td>
+        </tr>
+        <tr>
+          <th scope="row"><label for="customwp_customCss">Custom CSS</label></th>
+          <td><textarea name="customwp_live_branding[customCss]" id="customwp_customCss" class="large-text" rows="6"><?php echo esc_textarea($options['customCss']); ?></textarea></td>
+        </tr>
+      </table>
+      <?php submit_button('Save Branding'); ?>
+    </form>
+
+    <hr />
+    <h2>Snapshot Export</h2>
+    <p>Download a ZIP of the current WordPress filesystem for CustomWP Builder.</p>
+    <a class="button button-primary" href="<?php echo esc_url($snapshot_url); ?>">Download Snapshot ZIP</a>
+  </div>
+  <?php
+}
+
+add_action('admin_menu', function () {
+  add_options_page('CustomWP Branding', 'CustomWP Branding', 'manage_options', 'customwp-branding', 'customwp_live_branding_render_settings_page');
+});
+
+add_action('admin_init', function () {
+  register_setting('customwp_live_branding', 'customwp_live_branding', 'customwp_live_branding_sanitize');
+});
+
+add_action('admin_enqueue_scripts', function ($hook) {
+  if ($hook !== 'settings_page_customwp-branding') {
+    return;
+  }
+  wp_enqueue_media();
+  wp_enqueue_script('jquery');
+  $script = "(function(){\n"
+    . "function bindMedia(button){\n"
+    . "  button.addEventListener('click', function(){\n"
+    . "    var targetId = button.getAttribute('data-target');\n"
+    . "    var target = document.getElementById(targetId);\n"
+    . "    if (!target) return;\n"
+    . "    var frame = wp.media({ title: 'Select image', button: { text: 'Use image' }, multiple: false });\n"
+    . "    frame.on('select', function(){\n"
+    . "      var attachment = frame.state().get('selection').first().toJSON();\n"
+    . "      target.value = attachment.url || '';\n"
+    . "    });\n"
+    . "    frame.open();\n"
+    . "  });\n"
+    . "}\n"
+    . "document.querySelectorAll('.customwp-media-select').forEach(bindMedia);\n"
+    . "})();";
+  wp_add_inline_script('jquery', $script);
+});
+
+add_action('login_enqueue_scripts', function () {
+  $logo = customwp_live_branding_value('backendLoginLogoDataUrl');
   if (!$logo) {
     return;
   }
@@ -407,8 +538,7 @@ add_action('login_enqueue_scripts', function () {
 });
 
 add_action('admin_bar_menu', function ($wp_admin_bar) {
-  $options = customwp_live_branding_get_options();
-  $brand = isset($options['backendBrandName']) ? $options['backendBrandName'] : '';
+  $brand = customwp_live_branding_value('backendBrandName');
   if (!$brand) {
     return;
   }
@@ -422,9 +552,143 @@ add_action('admin_bar_menu', function ($wp_admin_bar) {
 }, 99);
 
 add_filter('admin_footer_text', function ($text) {
-  $options = customwp_live_branding_get_options();
-  $footer = isset($options['backendFooterText']) ? $options['backendFooterText'] : '';
+  $footer = customwp_live_branding_value('backendFooterText');
   return $footer ? esc_html($footer) : $text;
+});
+
+add_filter('pre_option_blogname', function ($value) {
+  $title = customwp_live_branding_value('frontendSiteTitle');
+  return $title ? $title : $value;
+});
+
+add_filter('pre_option_blogdescription', function ($value) {
+  $tagline = customwp_live_branding_value('frontendTagline');
+  return $tagline ? $tagline : $value;
+});
+
+add_action('wp_head', function () {
+  $accent = customwp_live_branding_value('accentColor', '#2F6FED');
+  $css = customwp_live_branding_value('customCss');
+  echo '<style>:root{--customwp-accent:' . esc_attr($accent) . ';}</style>';
+
+  if ($css) {
+    echo '<style id="customwp-custom-css">' . wp_strip_all_tags($css) . '</style>';
+  }
+});
+
+add_action('wp_body_open', function () {
+  $logo = customwp_live_branding_value('frontendLogoUrl');
+  $tagline = customwp_live_branding_value('frontendTagline');
+
+  if (!$logo && !$tagline) {
+    return;
+  }
+
+  echo '<div style="padding:12px 16px;border-bottom:1px solid rgba(0,0,0,.08);display:flex;gap:12px;align-items:center;background:#fff;">';
+  if ($logo) {
+    echo '<img src="' . esc_url($logo) . '" alt="logo" style="max-height:42px;width:auto;" />';
+  }
+  if ($tagline) {
+    echo '<span style="font-size:14px;opacity:.8;">' . esc_html($tagline) . '</span>';
+  }
+  echo '</div>';
+}, 2);
+
+function customwp_snapshot_should_skip($relative) {
+  $relative = str_replace('\\\\', '/', $relative);
+  $skip_prefixes = array(
+    '.git/',
+    'node_modules/',
+    'wp-content/cache/',
+    'wp-content/uploads/cache/',
+    'wp-content/uploads/customwp/'
+  );
+
+  foreach ($skip_prefixes as $prefix) {
+    if (strpos($relative, $prefix) === 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function customwp_snapshot_build_zip() {
+  if (!class_exists('ZipArchive')) {
+    return new WP_Error('customwp_zip_missing', 'ZipArchive is not available on this server.');
+  }
+
+  $root = realpath(ABSPATH);
+  if (!$root) {
+    return new WP_Error('customwp_root_missing', 'Could not resolve WordPress root.');
+  }
+
+  $uploads = wp_upload_dir();
+  if (empty($uploads['basedir'])) {
+    return new WP_Error('customwp_uploads_missing', 'Uploads directory is not available.');
+  }
+
+  $snapshot_dir = trailingslashit($uploads['basedir']) . 'customwp';
+  if (!file_exists($snapshot_dir)) {
+    wp_mkdir_p($snapshot_dir);
+  }
+
+  $zip_path = trailingslashit($snapshot_dir) . 'customwp-snapshot-' . gmdate('Ymd-His') . '.zip';
+  $zip = new ZipArchive();
+  if ($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+    return new WP_Error('customwp_zip_open_failed', 'Unable to create snapshot ZIP.');
+  }
+
+  $iterator = new RecursiveIteratorIterator(
+    new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+    RecursiveIteratorIterator::SELF_FIRST
+  );
+
+  foreach ($iterator as $file) {
+    $file_path = $file->getPathname();
+    $relative = ltrim(str_replace($root, '', $file_path), DIRECTORY_SEPARATOR);
+    $relative = str_replace('\\\\', '/', $relative);
+
+    if ($relative === '' || customwp_snapshot_should_skip($relative)) {
+      continue;
+    }
+
+    if ($file->isDir()) {
+      $zip->addEmptyDir($relative);
+    } else {
+      $zip->addFile($file_path, $relative);
+    }
+  }
+
+  $zip->close();
+  return $zip_path;
+}
+
+add_action('rest_api_init', function () {
+  register_rest_route('customwp/v1', '/snapshot', array(
+    'methods' => 'GET',
+    'permission_callback' => function () {
+      return current_user_can('manage_options');
+    },
+    'callback' => function () {
+      $zip_path = customwp_snapshot_build_zip();
+      if (is_wp_error($zip_path)) {
+        return $zip_path;
+      }
+      if (!file_exists($zip_path)) {
+        return new WP_Error('customwp_snapshot_missing', 'Snapshot ZIP not found.');
+      }
+
+      $filename = basename($zip_path);
+      nocache_headers();
+      header('Content-Type: application/zip');
+      header('Content-Disposition: attachment; filename="' . $filename . '"');
+      header('Content-Length: ' . filesize($zip_path));
+      readfile($zip_path);
+      unlink($zip_path);
+      exit;
+    }
+  ));
 });
 `;
 }
@@ -477,6 +741,45 @@ async function applyBackendBrandingToLiveSite(body) {
     }
     throw error;
   }
+}
+
+function parseFilenameFromContentDisposition(header) {
+  if (!header) return null;
+  const match = /filename="?(?<name>[^";]+)"?/i.exec(header);
+  return match?.groups?.name || null;
+}
+
+async function downloadLiveSnapshotZip(body) {
+  const siteUrl = normalizeSiteUrl(body.siteUrl);
+  const authHeader = buildBasicAuthHeader(body.username, body.appPassword);
+  const response = await fetch(joinSiteUrl(siteUrl, '/wp-json/customwp/v1/snapshot'), {
+    headers: {
+      Authorization: authHeader
+    }
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw createHttpError(
+        'CustomWP Live Branding Helper is not installed on the live site. Download it from /api/live/branding-plugin and install it first.',
+        404
+      );
+    }
+    throw createHttpError(`Snapshot download failed (${response.status}).`, response.status);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const filename = parseFilenameFromContentDisposition(response.headers.get('content-disposition'))
+    || `customwp-snapshot-${Date.now()}.zip`;
+
+  return {
+    siteUrl,
+    snapshotZip: {
+      filename,
+      dataBase64: Buffer.from(arrayBuffer).toString('base64')
+    },
+    sizeBytes: arrayBuffer.byteLength
+  };
 }
 
 async function downloadFile(url, outputPath) {
@@ -1276,6 +1579,13 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const result = await applyBackendBrandingToLiveSite(body);
     sendJson(res, 200, result);
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/live/snapshot') {
+    const body = await readJsonBody(req);
+    const snapshot = await downloadLiveSnapshotZip(body);
+    sendJson(res, 200, snapshot);
     return;
   }
 
