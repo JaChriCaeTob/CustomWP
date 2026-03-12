@@ -1,11 +1,37 @@
 :root {
   --bg: #f2efe8;
   --panel: #fffdfa;
+  --card: #ffffff;
   --ink: #1f1b18;
   --muted: #6f685f;
   --line: #ddd2c2;
   --accent: #136f63;
   --accent-soft: #d2f0eb;
+  --input-bg: #ffffff;
+  --button-bg: #f6f2eb;
+  --shadow: 0 4px 18px rgba(0, 0, 0, 0.03);
+  --bg-grad-1: radial-gradient(circle at 10% 5%, #f8f4eb 0%, transparent 35%);
+  --bg-grad-2: radial-gradient(circle at 85% 5%, #e3f3ef 0%, transparent 32%);
+  --log-bg: #111;
+  --log-ink: #d8f7e4;
+}
+
+:root[data-theme='dark'] {
+  --bg: #0e111a;
+  --panel: #151b26;
+  --card: #111827;
+  --ink: #e7edf7;
+  --muted: #a8b3c7;
+  --line: #273248;
+  --accent: #5cd3c2;
+  --accent-soft: rgba(92, 211, 194, 0.15);
+  --input-bg: #0f1521;
+  --button-bg: #1a2232;
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  --bg-grad-1: radial-gradient(circle at 15% 8%, rgba(92, 211, 194, 0.18) 0%, transparent 45%);
+  --bg-grad-2: radial-gradient(circle at 80% 10%, rgba(97, 138, 255, 0.18) 0%, transparent 42%);
+  --log-bg: #0c0f16;
+  --log-ink: #a9f4d0;
 }
 
 * {
@@ -15,11 +41,9 @@
 body {
   margin: 0;
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-  background:
-    radial-gradient(circle at 10% 5%, #f8f4eb 0%, transparent 35%),
-    radial-gradient(circle at 85% 5%, #e3f3ef 0%, transparent 32%),
-    var(--bg);
+  background: var(--bg-grad-1), var(--bg-grad-2), var(--bg);
   color: var(--ink);
+  transition: background 0.2s ease, color 0.2s ease;
 }
 
 .hero {
@@ -53,7 +77,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 1rem;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--shadow);
 }
 
 .build-panel {
@@ -88,7 +112,9 @@ button {
   padding: 0.62rem 0.72rem;
   font-size: 0.95rem;
   font-family: inherit;
-  background: #fff;
+  background: var(--input-bg);
+  color: var(--ink);
+  transition: border-color 0.16s ease, background 0.2s ease, color 0.2s ease;
 }
 
 textarea {
@@ -98,14 +124,15 @@ textarea {
 button,
 .btn-like {
   cursor: pointer;
-  background: #f6f2eb;
-  transition: transform 0.16s ease, border-color 0.16s ease;
+  background: var(--button-bg);
+  color: var(--ink);
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.2s ease, color 0.2s ease;
 }
 
 button:hover,
 .btn-like:hover {
   transform: translateY(-1px);
-  border-color: #c4b8a7;
+  border-color: var(--accent);
 }
 
 button.primary {
@@ -154,7 +181,7 @@ button.primary {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 0.55rem 0.6rem;
-  background: #fff;
+  background: var(--card);
 }
 
 .plugin-card .title {
@@ -212,8 +239,8 @@ button.primary {
   align-items: center;
   gap: 0.4rem;
   background: var(--accent-soft);
-  color: #0f5148;
-  border: 1px solid #abd9d0;
+  color: var(--accent);
+  border: 1px solid var(--accent);
   border-radius: 100px;
   font-size: 0.82rem;
   padding: 0.25rem 0.55rem;
@@ -236,8 +263,8 @@ button.primary {
 }
 
 .logs {
-  background: #111;
-  color: #d8f7e4;
+  background: var(--log-bg);
+  color: var(--log-ink);
   border-radius: 10px;
   padding: 0.65rem;
   min-height: 180px;
@@ -251,6 +278,62 @@ button.primary {
   margin-top: 0.7rem;
   color: var(--accent);
   font-weight: 700;
+}
+
+.topbar {
+  max-width: 1200px;
+  margin: 0 auto 3rem;
+  padding: 0 1rem;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: center;
+  justify-items: center;
+}
+
+.nightModeContainer {
+  display: flex;
+  justify-content: center;
+}
+
+.nightModeToggle {
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.nightModeToggle .theme-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+}
+
+.nightModeToggle svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+}
+
+.nightModeToggle .sun {
+  display: none;
+}
+
+:root[data-theme='dark'] .nightModeToggle .sun {
+  display: inline-flex;
+}
+
+:root[data-theme='dark'] .nightModeToggle .moon {
+  display: none;
+}
+
+.theme-label {
+  font-size: 0.85rem;
 }
 
 @media (max-width: 760px) {

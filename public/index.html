@@ -7,10 +7,30 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <header class="hero">
-      <h1>CustomWP Builder</h1>
-      <p>Build branded WordPress packages with pinned core and plugin versions.</p>
-    </header>
+    <div class="topbar">
+      <div class="header">
+        <header class="hero">
+          <h1>CustomWP Builder</h1>
+          <p>Build branded WordPress packages with pinned core and plugin versions.</p>
+        </header>
+      </div>
+      <div class="nightModeContainer">
+          <button id="theme-toggle" class="nightModeToggle" type="button" aria-label="Toggle night mode" aria-pressed="false">
+            <span class="theme-icon moon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+                <path d="M21 14.5A8.5 8.5 0 0 1 9.5 3a7.5 7.5 0 1 0 11.5 11.5z"></path>
+              </svg>
+            </span>
+            <span class="theme-icon sun" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+                <circle cx="12" cy="12" r="4"></circle>
+                <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"></path>
+              </svg>
+            </span>
+            <span class="theme-label">Night</span>
+          </button>
+      </div>
+    </div>
 
     <main class="layout">
       <section class="panel">
@@ -73,10 +93,10 @@
       <section class="panel">
         <h2>3) Backend Branding</h2>
         <label for="backend-brand-name">Admin bar brand name</label>
-        <input id="backend-brand-name" type="text" placeholder="Acme CMS" />
+        <input id="backend-brand-name" type="text" placeholder="Your CMS" />
 
         <label for="backend-footer-text">Admin footer text</label>
-        <input id="backend-footer-text" type="text" placeholder="Powered by Acme Digital" />
+        <input id="backend-footer-text" type="text" placeholder="Powered by YOU!" />
 
         <label for="backend-login-logo">Login logo</label>
         <input id="backend-login-logo" type="file" accept="image/*" />

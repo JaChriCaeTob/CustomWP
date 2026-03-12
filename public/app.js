@@ -18,6 +18,7 @@ const els = {
   liveSiteUrl: document.getElementById('live-site-url'),
   liveSiteUsername: document.getElementById('live-site-username'),
   liveSiteAppPassword: document.getElementById('live-site-app-password'),
+  themeToggle: document.getElementById('theme-toggle'),
   importLiveSite: document.getElementById('import-live-site'),
   applyLiveBranding: document.getElementById('apply-live-branding'),
   pullLiveSnapshot: document.getElementById('pull-live-snapshot'),
@@ -127,6 +128,45 @@ function triggerDownloadFromBase64(base64, filename) {
 function setBuildStatus(message, type = 'info') {
   els.buildStatus.textContent = message;
   els.buildStatus.dataset.type = type;
+}
+
+function applyTheme(theme, { persist = true } = {}) {
+  const normalized = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = normalized;
+  if (persist) {
+    localStorage.setItem('customwp-theme', normalized);
+  }
+
+  if (els.themeToggle) {
+    const label = els.themeToggle.querySelector('.theme-label');
+    const isDark = normalized === 'dark';
+    els.themeToggle.setAttribute('aria-pressed', String(isDark));
+    if (label) {
+      label.textContent = isDark ? 'Light' : 'Night';
+    }
+  }
+}
+
+function initThemeToggle() {
+  if (!els.themeToggle) return;
+
+  const stored = localStorage.getItem('customwp-theme');
+  const media = window.matchMedia('(prefers-color-scheme: dark)');
+  if (stored) {
+    applyTheme(stored, { persist: false });
+  } else {
+    applyTheme(media.matches ? 'dark' : 'light', { persist: false });
+  }
+
+  media.addEventListener('change', (event) => {
+    if (localStorage.getItem('customwp-theme')) return;
+    applyTheme(event.matches ? 'dark' : 'light', { persist: false });
+  });
+
+  els.themeToggle.addEventListener('click', () => {
+    const current = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    applyTheme(current === 'dark' ? 'light' : 'dark');
+  });
 }
 
 function ensureVersionOption(version) {
@@ -755,6 +795,7 @@ async function boot() {
   renderSelectedPlugins();
   renderUploadedPlugins();
   registerEvents();
+  initThemeToggle();
   await loadVersions();
 }
 
